@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Background,
   Controls,
@@ -30,6 +30,10 @@ export function Canvas() {
   const [selEdges, setSelEdges] = useState<Set<string>>(new Set());
   const [mouse, setMouse] = useState<{ x: number; y: number } | null>(null);
   const rf = useReactFlow();
+  const loadSeq = useStore((s) => s.loadSeq);
+  useEffect(() => {
+    if (loadSeq) requestAnimationFrame(() => rf.fitView({ maxZoom: 1.2, padding: 0.15 }));
+  }, [loadSeq, rf]);
 
   const nodes: DeviceNodeType[] = useMemo(
     () =>

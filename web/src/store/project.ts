@@ -34,6 +34,8 @@ interface State {
   windows: FloatingWindow[];
   /** Увеличивается при каждом изменении состояния симулятора — для перерисовки индикаторов и таблиц. */
   simTick: number;
+  /** Растёт при открытии проекта — холст подгоняет масштаб. */
+  loadSeq: number;
   theme: 'light' | 'dark';
 
   apply: (fn: (p: Project) => void, reason?: string) => void;
@@ -111,6 +113,7 @@ export const useStore = create<State>((set, get) => {
     picker: null,
     windows: [],
     simTick: 0,
+    loadSeq: 0,
     theme: initialTheme(),
 
     apply(fn, reason = 'Топология или настройки изменены') {
@@ -122,7 +125,7 @@ export const useStore = create<State>((set, get) => {
 
     loadProject(p) {
       syncSim(p, 'Открыт проект');
-      set((s) => ({ project: p, past: [], future: [], windows: [], pending: null, picker: null, simTick: s.simTick + 1 }));
+      set((s) => ({ project: p, past: [], future: [], windows: [], pending: null, picker: null, simTick: s.simTick + 1, loadSeq: s.loadSeq + 1 }));
     },
 
     undo() {
