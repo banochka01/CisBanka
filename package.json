@@ -1,9 +1,13 @@
 {
   "name": "ciscobanka",
   "private": true,
-  "workspaces": ["engine"],
+  "workspaces": [
+    "engine",
+    "web"
+  ],
   "scripts": {
     "test": "npm run test -w engine",
-    "typecheck": "npm run typecheck -w engine"
+    "typecheck": "npm run typecheck -w engine",
+    "dev": "npm run dev -w web"
   }
 }
