@@ -100,6 +100,8 @@ export type QEvent = { seq: number; time: number } & (
 /** Всё изменяемое состояние симуляции — целиком попадает в снапшот. */
 export interface SimState {
   time: number;
+  /** Сколько событий обработано — номер шага для истории. */
+  step: number;
   seq: number;
   nextId: number;
   rng: number;

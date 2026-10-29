@@ -34,6 +34,24 @@ describe('детерминизм и шаг назад', () => {
     expect(JSON.stringify(sim.state)).toBe(refState);
   });
 
+  it('шаг назад через внешнюю команду (ping посреди симуляции) и реплей с чекпоинтами', () => {
+    const { b, pc1, pc2 } = twoSubnets();
+    const sim = new Simulator(b.project, { checkpointEvery: 7 });
+    sim.ping(pc1.id, '192.168.2.10', 1);
+    for (let i = 0; i < 10; i++) sim.step();
+    sim.ping(pc2.id, '192.168.1.10', 1);
+    for (let i = 0; i < 25; i++) sim.step();
+    const ref = JSON.stringify([sim.log, sim.state]);
+    while (sim.stepBack());
+    expect(sim.state.step).toBe(0);
+    expect(Object.keys(sim.state.jobs)).toHaveLength(1);
+    // вперёд: до шага 10, повторяем команду, ещё 25
+    for (let i = 0; i < 10; i++) sim.step();
+    sim.ping(pc2.id, '192.168.1.10', 1);
+    for (let i = 0; i < 25; i++) sim.step();
+    expect(JSON.stringify([sim.log, sim.state])).toBe(ref);
+  });
+
   it('изменение топологии сбрасывает Runtime с записью в журнале', () => {
     const { b, pc1 } = twoSubnets();
     const sim = new Simulator(b.project);

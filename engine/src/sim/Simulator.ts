@@ -17,8 +17,10 @@ export interface SimOptions {
   maxEventsPerTick?: number;
   /** Сколько свитчей может пройти один кадр. Больше — петля. */
   maxL2Hops?: number;
-  /** Глубина истории для «шага назад». */
-  maxSnapshots?: number;
+  /** Чекпоинт состояния делается раз в N шагов; шаг назад = восстановить чекпоинт + реплей. */
+  checkpointEvery?: number;
+  /** Сколько чекпоинтов хранить (глубина истории ≈ checkpointEvery × maxCheckpoints шагов). */
+  maxCheckpoints?: number;
   arpTtl?: number;
   arpTimeout?: number;
   macAging?: number;
@@ -27,7 +29,8 @@ export interface SimOptions {
 const DEFAULTS: Required<SimOptions> = {
   maxEventsPerTick: 500,
   maxL2Hops: 32,
-  maxSnapshots: 2000,
+  checkpointEvery: 50,
+  maxCheckpoints: 400,
   arpTtl: 120_000,
   arpTimeout: 1000,
   macAging: 300_000,
@@ -53,13 +56,22 @@ export class Simulator {
   private devices = new Map<string, Device>();
   private ports = new Map<string, { device: Device; port: Port }>();
   private portLinks = new Map<string, Link>();
-  private snapshots: { state: SimState; logLen: number }[] = [];
+  /**
+   * История для шага назад. Полный снапшот на каждом шаге дорог (~1,5 мс и ~40 КБ
+   * на 30 устройствах), поэтому храним чекпоинты раз в N шагов, а шаг назад —
+   * это восстановление ближайшего чекпоинта и детерминированный реплей событий
+   * (PRNG живёт в состоянии). Внешние команды (ping, renewDhcp…) не являются
+   * событиями очереди, поэтому сразу после них делается внеочередной чекпоинт:
+   * реплей никогда не перешагивает через команду.
+   */
+  private checkpoints: { step: number; state: SimState; logLen: number }[] = [];
 
   constructor(project: Project, opts: SimOptions = {}) {
     this.opts = { ...DEFAULTS, ...opts };
     this.load(project);
     this.state = this.freshState(0);
     this.boot();
+    this.checkpoint();
   }
 
   // ---------- топология ----------
@@ -83,16 +95,17 @@ export class Simulator {
   setTopology(project: Project, reason = 'Топология или настройки изменены') {
     this.load(project);
     this.state = this.freshState(this.state.time, this.state.nextId);
-    this.snapshots = [];
+    this.checkpoints = [];
     this.addLog({
       kind: 'reset',
       reason: `${reason}: состояние симуляции сброшено — MAC- и ARP-таблицы очищены, пакеты в пути удалены, задачи остановлены`,
     });
     this.boot();
+    this.checkpoint();
   }
 
   private freshState(time: number, nextId = 1): SimState {
-    return { time, seq: 0, nextId, rng: this.project.seed >>> 0, queue: [], rt: {}, jobs: {}, tick: { t: -1, n: 0 } };
+    return { time, step: 0, seq: 0, nextId, rng: this.project.seed >>> 0, queue: [], rt: {}, jobs: {}, tick: { t: -1, n: 0 } };
   }
 
   /** При старте хосты с DHCP сами запрашивают адрес. */
@@ -233,15 +246,32 @@ export class Simulator {
   }
 
   stepBack(): boolean {
-    const s = this.snapshots.pop();
-    if (!s) return false;
-    this.state = s.state;
-    this.log.length = s.logLen;
+    const target = this.state.step - 1;
+    let i = this.checkpoints.length - 1;
+    while (i >= 0 && this.checkpoints[i].step > target) i--;
+    if (i < 0) return false;
+    this.checkpoints.length = i + 1;
+    const cp = this.checkpoints[i];
+    this.state = structuredClone(cp.state);
+    this.log.length = cp.logLen;
+    while (this.state.step < target) this.process(false);
     return true;
   }
 
   get canStepBack() {
-    return this.snapshots.length > 0;
+    return this.state.step > 0 && this.checkpoints.length > 0 && this.checkpoints[0].step < this.state.step;
+  }
+
+  private checkpoint() {
+    this.checkpoints.push({ step: this.state.step, state: structuredClone(this.state), logLen: this.log.length });
+    if (this.checkpoints.length > this.opts.maxCheckpoints) this.checkpoints.shift();
+  }
+
+  /** Внешняя команда: выполнить и сразу зафиксировать чекпоинт. */
+  private command<T>(fn: () => T): T {
+    const r = fn();
+    this.checkpoint();
+    return r;
   }
 
   /** Выполнять события до момента time включительно (без истории — режим реального времени). */
@@ -263,11 +293,11 @@ export class Simulator {
   private process(withHistory: boolean): LogEntry[] | null {
     const ev = this.state.queue[0];
     if (!ev) return null;
-    if (withHistory) {
-      this.snapshots.push({ state: structuredClone(this.state), logLen: this.log.length });
-      if (this.snapshots.length > this.opts.maxSnapshots) this.snapshots.shift();
+    if (withHistory && this.state.step % this.opts.checkpointEvery === 0 && this.checkpoints.at(-1)?.step !== this.state.step) {
+      this.checkpoint();
     }
     this.state.queue.shift();
+    this.state.step++;
     this.state.time = ev.time;
     const before = this.log.length;
     if (ev.kind === 'rx') this.handleRx(ev);
@@ -307,22 +337,22 @@ export class Simulator {
   // ---------- инструменты (вкладка «Инструменты» на ПК) ----------
 
   ping(deviceId: string, target: string, count = 4): Job {
-    return apps.startPing(this, deviceId, target, count);
+    return this.command(() => apps.startPing(this, deviceId, target, count));
   }
 
   traceroute(deviceId: string, target: string): Job {
-    return apps.startTraceroute(this, deviceId, target);
+    return this.command(() => apps.startTraceroute(this, deviceId, target));
   }
 
   openUrl(deviceId: string, url: string): Job {
-    return apps.startHttp(this, deviceId, url);
+    return this.command(() => apps.startHttp(this, deviceId, url));
   }
 
   nslookup(deviceId: string, name: string): Job {
-    return apps.startNslookup(this, deviceId, name);
+    return this.command(() => apps.startNslookup(this, deviceId, name));
   }
 
   renewDhcp(deviceId: string): Job {
-    return apps.startDhcp(this, deviceId);
+    return this.command(() => apps.startDhcp(this, deviceId));
   }
 }
