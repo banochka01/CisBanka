@@ -30,6 +30,8 @@ interface State {
   cable: CableType | null;
   pending: LinkEnd | null;
   picker: { deviceId: string; x: number; y: number } | null;
+  /** Запасной способ добавления (тачскрин): выбрали устройство в палитре, следующий клик по холсту ставит его. */
+  placing: DeviceKind | null;
 
   windows: FloatingWindow[];
   /** Увеличивается при каждом изменении состояния симулятора — для перерисовки индикаторов и таблиц. */
@@ -53,6 +55,7 @@ interface State {
   /** Удалить устройства и провода одним действием (одна запись в истории). */
   removeItems: (deviceIds: string[], linkIds: string[]) => void;
 
+  setPlacing: (k: DeviceKind | null) => void;
   setCable: (c: CableType | null) => void;
   openPicker: (deviceId: string, x: number, y: number) => void;
   pickPort: (end: LinkEnd) => void;
@@ -111,6 +114,7 @@ export const useStore = create<State>((set, get) => {
     cable: null,
     pending: null,
     picker: null,
+    placing: null,
     windows: [],
     simTick: 0,
     loadSeq: 0,
@@ -203,8 +207,12 @@ export const useStore = create<State>((set, get) => {
       set((s) => ({ windows: s.windows.filter((w) => !deviceIds.includes(w.deviceId)) }));
     },
 
+    setPlacing(k) {
+      set({ placing: k, cable: null, pending: null, picker: null });
+    },
+
     setCable(c) {
-      set({ cable: c, pending: null, picker: null });
+      set({ cable: c, pending: null, picker: null, placing: null });
     },
 
     openPicker(deviceId, x, y) {

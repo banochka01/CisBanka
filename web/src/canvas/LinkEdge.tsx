@@ -20,7 +20,20 @@ export type LinkEdgeType = Edge<
   'link'
 >;
 
-const LED_OFFSET = 40;
+/**
+ * Габариты узла относительно центра иконки: иконка 64×64, под ней имя.
+ * Индикатор и подпись порта ставим сразу за краем узла, чтобы не наезжать на имя.
+ */
+const NODE_BOX = { left: 42, right: 42, up: 36, down: 54 };
+const LED_GAP = 8;
+const LABEL_GAP = 22;
+
+/** Расстояние от центра узла до края его рамки вдоль направления (ux, uy). */
+function exitDist(ux: number, uy: number) {
+  const tx = ux > 0 ? NODE_BOX.right / ux : ux < 0 ? NODE_BOX.left / -ux : Infinity;
+  const ty = uy > 0 ? NODE_BOX.down / uy : uy < 0 ? NODE_BOX.up / -uy : Infinity;
+  return Math.min(tx, ty);
+}
 const LED_COLORS: Record<Led, string> = { none: 'transparent', green: 'var(--led-green)', orange: 'var(--led-orange)', red: 'var(--led-red)' };
 
 export const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, targetY, data, selected }: EdgeProps<LinkEdgeType>) {
@@ -32,8 +45,16 @@ export const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, 
   const len = Math.hypot(dx, dy) || 1;
   const ux = dx / len;
   const uy = dy / len;
-  const a = { x: sourceX + ux * LED_OFFSET, y: sourceY + uy * LED_OFFSET };
-  const b = { x: targetX - ux * LED_OFFSET, y: targetY - uy * LED_OFFSET };
+  const offA = exitDist(ux, uy) + LED_GAP;
+  const offB = exitDist(-ux, -uy) + LED_GAP;
+  const a = { x: sourceX + ux * offA, y: sourceY + uy * offA };
+  const b = { x: targetX - ux * offB, y: targetY - uy * offB };
+  // подпись — чуть дальше индикатора по проводу и сбоку от него; на коротком проводе — просто сбоку
+  const gap = len > offA + offB + LABEL_GAP * 2 + 20 ? LABEL_GAP : 0;
+  const side = gap ? 11 : 20;
+  const la = { x: a.x + ux * gap + uy * side, y: a.y + uy * gap - ux * side };
+  const lb = { x: b.x - ux * gap + uy * side, y: b.y - uy * gap - ux * side };
+  const roomy = len > offA + offB + 10;
   const mid = { x: (sourceX + targetX) / 2, y: (sourceY + targetY) / 2 };
   const path = `M${sourceX},${sourceY} L${targetX},${targetY}`;
   const stroke = data.badCable ? 'var(--led-red)' : data.cable === 'fiber' ? 'var(--cable-fiber)' : 'var(--cable-copper)';
@@ -57,19 +78,23 @@ export const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, 
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
       />
-      {len > LED_OFFSET * 2.4 && (
+      {len > offA + offB + 10 && (
         <>
           <circle cx={a.x} cy={a.y} r={5} fill={LED_COLORS[data.ledA]} stroke="var(--bg)" strokeWidth={1.5} />
           <circle cx={b.x} cy={b.y} r={5} fill={LED_COLORS[data.ledB]} stroke="var(--bg)" strokeWidth={1.5} />
         </>
       )}
       <EdgeLabelRenderer>
-        <div className="port-label" style={{ transform: `translate(-50%,-50%) translate(${a.x + uy * 14}px,${a.y - ux * 14}px)` }}>
-          {data.portA}
-        </div>
-        <div className="port-label" style={{ transform: `translate(-50%,-50%) translate(${b.x + uy * 14}px,${b.y - ux * 14}px)` }}>
-          {data.portB}
-        </div>
+        {roomy && (
+          <>
+            <div className="port-label" style={{ transform: `translate(-50%,-50%) translate(${la.x}px,${la.y}px)` }}>
+              {data.portA}
+            </div>
+            <div className="port-label" style={{ transform: `translate(-50%,-50%) translate(${lb.x}px,${lb.y}px)` }}>
+              {data.portB}
+            </div>
+          </>
+        )}
         {data.badCable && (
           <button
             className="link-bang nodrag nopan"

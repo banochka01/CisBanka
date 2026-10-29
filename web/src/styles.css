@@ -99,6 +99,7 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
   background: var(--panel-2); font-size: 12.5px;
 }
 .palette-item:hover { border-color: var(--accent); }
+.palette-item.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
 .cable-list { display: flex; flex-direction: column; gap: 5px; }
 .cable-btn {
   display: flex; align-items: center; gap: 8px; text-align: left;
@@ -114,6 +115,7 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 /* Холст */
 .canvas { flex: 1; position: relative; }
 .canvas.cable-mode .react-flow__node { cursor: crosshair; }
+.canvas.placing .react-flow__pane { cursor: copy; }
 .device-node { width: 80px; display: flex; flex-direction: column; align-items: center; position: relative; }
 .device-node svg { display: block; }
 .device-node.selected svg { filter: drop-shadow(0 0 4px var(--accent)); }

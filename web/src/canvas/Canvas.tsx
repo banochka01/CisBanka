@@ -24,6 +24,7 @@ export function Canvas() {
   const project = useStore((s) => s.project);
   const simTick = useStore((s) => s.simTick);
   const cable = useStore((s) => s.cable);
+  const placing = useStore((s) => s.placing);
   const pending = useStore((s) => s.pending);
   const theme = useStore((s) => s.theme);
   const [selNodes, setSelNodes] = useState<Set<string>>(new Set());
@@ -129,7 +130,7 @@ export function Canvas() {
 
   return (
     <div
-      className={`canvas${cable ? ' cable-mode' : ''}`}
+      className={`canvas${cable ? ' cable-mode' : ''}${placing ? ' placing' : ''}`}
       onDragOver={(e) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'copy';
@@ -151,7 +152,16 @@ export function Canvas() {
         onNodeDoubleClick={(_, n) => {
           if (!useStore.getState().cable) useStore.getState().openWindow(n.id);
         }}
-        onPaneClick={() => useStore.setState({ picker: null })}
+        onPaneClick={(e) => {
+          const st = useStore.getState();
+          if (st.placing) {
+            const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+            st.addDevice(st.placing, { x: Math.round(pos.x - CENTER.x), y: Math.round(pos.y - CENTER.y) });
+            st.setPlacing(null);
+            return;
+          }
+          useStore.setState({ picker: null });
+        }}
         onDelete={({ nodes: dn, edges: de }) => {
           useStore.getState().removeItems(
             dn.map((n) => n.id),

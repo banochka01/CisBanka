@@ -19,6 +19,7 @@ function useHotkeys() {
       const st = useStore.getState();
       if (e.key === 'Escape') {
         if (st.cable || st.pending || st.picker) st.cancelCable();
+        if (st.placing) st.setPlacing(null);
         return;
       }
       if (isTyping(e)) return;
