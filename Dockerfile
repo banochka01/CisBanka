@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1
-# Сборка в три стадии: build (фронтенд + сервер), deps (только рабочие зависимости сервера), финальный образ.
+# Стадии: base-build (компилятор), build (фронтенд + сервер), deps (только рабочие зависимости сервера), финальный образ.
 
-FROM node:22-bookworm-slim AS build
+FROM node:22-bookworm-slim AS base-build
+# компилятор нужен, если для better-sqlite3 под эту версию Node нет готового бинарника
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
+
+FROM base-build AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY engine/package.json engine/
@@ -13,9 +17,7 @@ COPY web web
 COPY server server
 RUN npm run build -w web && npm run build -w server
 
-FROM node:22-bookworm-slim AS deps
-# компилятор нужен, только если для better-sqlite3 не нашлось готового бинарника
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
+FROM base-build AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY engine/package.json engine/
