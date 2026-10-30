@@ -34,6 +34,8 @@ export function Canvas() {
   const [selNodes, setSelNodes] = useState<Set<string>>(new Set());
   const [selEdges, setSelEdges] = useState<Set<string>>(new Set());
   const [mouse, setMouse] = useState<{ x: number; y: number } | null>(null);
+  // мини-карта по умолчанию свёрнута — не закрывает устройства в углу холста
+  const [showMap, setShowMap] = useState(false);
   const rf = useReactFlow();
   const loadSeq = useStore((s) => s.loadSeq);
   useEffect(() => {
@@ -187,7 +189,7 @@ export function Canvas() {
       >
         <Background gap={24} />
         <Controls showInteractive={false} />
-        <MiniMap pannable zoomable />
+        {showMap && <MiniMap pannable zoomable />}
         {mode === 'simulation' && <SimOverlay />}
         {pendingDev && mouse && (
           <ViewportPortal>
@@ -205,6 +207,9 @@ export function Canvas() {
           </ViewportPortal>
         )}
       </ReactFlow>
+      <button className="btn minimap-toggle" onClick={() => setShowMap((v) => !v)} title="Мини-карта всего проекта" aria-pressed={showMap}>
+        {showMap ? '▾ Скрыть карту' : '▸ Карта'}
+      </button>
       {pdu && (
         <div className="canvas-hint">
           ✉ Простой пакет (ping): {pdu.srcId ? 'кликните получателя' : 'кликните отправителя'}. Esc — отмена.

@@ -7,7 +7,7 @@ import { useSim } from '../../store/sim';
 interface Run {
   title: string;
   target: string;
-  jobId: number;
+  cmdId: number;
 }
 
 /** «Инструменты» ПК: ping, traceroute, открыть сайт, nslookup — вывод текстом. */
@@ -25,15 +25,19 @@ export function Tools({ d }: { d: Device }) {
     const job = start();
     settle();
     bumpSim();
-    setRuns((r) => [...r, { title, target, jobId: job.id }]);
+    setRuns((r) => [...r, { title, target, cmdId: job.cmdId! }]);
   };
   const sim = getSim();
 
   // вывод берём из задач симулятора: в режиме симуляции он дописывается по мере шагов
   const out = runs
     .map((r) => {
-      const job = sim.job(r.jobId);
-      if (!job) return `> ${r.title} ${r.target}\n(прервано: состояние симуляции сброшено)`;
+      const job = sim.commandJob(r.cmdId);
+      if (!job) {
+        const c = sim.commands.find((x) => x.id === r.cmdId);
+        const why = c ? `(ещё не выполнена — будет в момент t = ${c.time} мс)` : '(прервано: состояние симуляции сброшено)';
+        return `> ${r.title} ${r.target}\n${why}`;
+      }
       const tail = job.done ? '' : `${job.lines.length ? '\n' : ''}… идёт — шагайте симуляцию`;
       return `> ${r.title} ${r.target}\n${job.lines.join('\n')}${tail}`;
     })

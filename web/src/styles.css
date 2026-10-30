@@ -292,6 +292,13 @@ table.grid .field input { width: 120px; }
 .journal-table tr.current td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .journal-table tr.sel td { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 .journal-table tr.dropped b { color: var(--danger); }
+.journal-table tr.future td { opacity: 0.45; }
+.journal-table tr.present-last td { border-bottom: 2px solid var(--accent); }
+.minimap-toggle {
+  position: absolute; right: 10px; bottom: 10px; z-index: 6; font-size: 12.5px;
+  box-shadow: var(--shadow);
+}
+.react-flow__minimap { margin-bottom: 44px; }
 .pad { padding: 8px 10px; margin: 0; }
 .scenarios { flex: 1; overflow-y: auto; }
 .nowrap { white-space: nowrap; }

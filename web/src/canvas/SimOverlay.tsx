@@ -209,8 +209,10 @@ export function SimOverlay() {
 
 /** Запись журнала, в «Выходе» которой есть этот пакет (кто его отправил). */
 function sourceEntry(p: Packet): number | null {
-  const log = getSim().log;
-  for (let i = log.length - 1; i >= 0 && i >= log.length - 2000; i--) {
+  const sim = getSim();
+  const log = sim.log;
+  const end = sim.logCursor;
+  for (let i = end - 1; i >= 0 && i >= end - 2000; i--) {
     if (log[i].out?.some((o) => o.packet.id === p.id)) return log[i].id;
   }
   return null;

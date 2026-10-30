@@ -63,7 +63,7 @@ function Controls() {
   const { stepForward, stepBack, setPlaying, setSpeed, togglePdu } = useSim.getState();
   const pdu = useSim((s) => s.pdu);
   const s = getSim();
-  const idle = s.pending.length === 0;
+  const idle = !s.canStepForward;
 
   return (
     <div className="sim-controls">
@@ -83,7 +83,10 @@ function Controls() {
         </button>
       </div>
       <div className="sim-status">
-        <span>Хоп {s.hop}</span>
+        <span>
+          Хоп {s.hop}
+          {s.hopCount > s.hop ? ` из ${s.hopCount}` : ''}
+        </span>
         <span>t = {s.now} мс</span>
         <label className="speed">
           Скорость
@@ -135,19 +138,26 @@ function Journal() {
   const selected = useSim((s) => s.selected);
   const ref = useRef<HTMLDivElement>(null);
   const s = getSim();
-  const all = s.log.slice(getJournalFrom());
+  const from = getJournalFrom();
+  const all = s.log.slice(from);
+  const cursor = s.logCursor;
   const rows = all.filter((e) => !e.protocol || !hidden.includes(e.protocol)).slice(-JOURNAL_LIMIT);
   const cur = s.hop;
 
+  // держим в поле зрения границу настоящего и будущего
   useLayoutEffect(() => {
     const el = ref.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [rows.length]);
+    const cur = el?.querySelector<HTMLElement>('tr.present-last');
+    if (el && cur) {
+      const top = cur.offsetTop - el.clientHeight + cur.offsetHeight * 3;
+      if (top > el.scrollTop || cur.offsetTop < el.scrollTop) el.scrollTop = Math.max(0, top);
+    } else if (el) el.scrollTop = el.scrollHeight;
+  }, [rows.length, cursor]);
 
   const open = (e: LogEntry) => {
     const k = s.hopOf(e);
     const st = useSim.getState();
-    if (k >= 1 && k !== s.hop) st.seekHop(k);
+    if (k >= 1 && k !== s.hop) st.seekHop(k); // назад или вперёд по серому будущему
     st.select(e.id, e.kind === 'send' ? 'out' : 'in');
   };
 
@@ -156,15 +166,17 @@ function Journal() {
       {!rows.length && <p className="muted pad">Журнал пуст. Шагайте вперёд — здесь появится каждое событие.</p>}
       <table className="grid journal-table">
         <tbody>
-          {rows.map((e) => {
+          {rows.map((e, i) => {
             const k = s.hopOf(e);
+            const future = e.id > cursor;
+            const presentLast = !future && (rows[i + 1]?.id ?? Infinity) > cursor;
             const label = e.kind === 'reset' ? 'Сброс' : e.kind === 'info' ? 'Инфо' : decisionLabel(s, e);
             return (
               <tr
                 key={e.id}
-                className={`${k === cur && cur > 0 ? 'current' : ''}${selected?.entryId === e.id ? ' sel' : ''}${e.action === 'drop' ? ' dropped' : ''}`}
+                className={`${k === cur && cur > 0 ? 'current' : ''}${selected?.entryId === e.id ? ' sel' : ''}${e.action === 'drop' ? ' dropped' : ''}${future ? ' future' : ''}${presentLast ? ' present-last' : ''}`}
                 onClick={() => open(e)}
-                title={e.reason}
+                title={future ? `Будущее (уже просчитано): ${e.reason}. Клик — перемотать сюда.` : e.reason}
               >
                 <td className="muted">{k > 0 ? k : ''}</td>
                 <td>{e.protocol && <span className="chip-dot" style={{ background: PROTO_COLORS[e.protocol] }} title={e.protocol} />}</td>
@@ -182,8 +194,12 @@ function Journal() {
 }
 
 function scenarioStatus(sc: Scenario): { text: string; cls: string } {
-  const job = getSim().job(sc.jobId);
-  if (!job) return { text: 'не запущен', cls: 'muted' };
+  const sim = getSim();
+  const job = sim.commandJob(sc.cmdId);
+  if (!job) {
+    const c = sim.commands.find((x) => x.id === sc.cmdId);
+    return c ? { text: `ещё не отправлен (t = ${c.time} мс)`, cls: 'muted' } : { text: 'не запущен', cls: 'muted' };
+  }
   if (!job.done) return { text: 'в пути…', cls: '' };
   return Object.values(job.results ?? {}).includes('ok') ? { text: 'Успешно', cls: 'ok' } : { text: 'Неудача', cls: 'bad' };
 }

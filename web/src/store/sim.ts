@@ -12,7 +12,8 @@ export interface Scenario {
   srcId: string;
   dstId: string;
   dstIp: string;
-  jobId: number;
+  /** Команда в истории симулятора: при перемотке/реплее задача пересоздаётся, команда — нет. */
+  cmdId: number;
 }
 
 interface SimUi {
@@ -89,8 +90,6 @@ export const useSim = create<SimUi>((set, get) => ({
   stepBack() {
     const sim = getSim();
     if (sim.stepBackHop()) {
-      // в самом начале — снова показать только что созданные пакеты у отправителей
-      if (sim.hop === 0) settle();
       set({ anim: null, playing: false });
       bump();
     }
@@ -99,7 +98,6 @@ export const useSim = create<SimUi>((set, get) => ({
   seekHop(k) {
     const sim = getSim();
     if (sim.seekHop(k)) {
-      if (sim.hop === 0) settle();
       set({ anim: null, playing: false });
       bump();
     }
@@ -150,7 +148,7 @@ export const useSim = create<SimUi>((set, get) => ({
     set((st) => ({
       pdu: null,
       pduError: null,
-      scenarios: [...st.scenarios, { id: scenarioSeq++, srcId: pdu.srcId!, dstId: deviceId, dstIp, jobId: job.id }],
+      scenarios: [...st.scenarios, { id: scenarioSeq++, srcId: pdu.srcId!, dstId: deviceId, dstIp, cmdId: job.cmdId! }],
     }));
     bump();
   },
@@ -163,7 +161,7 @@ export const useSim = create<SimUi>((set, get) => ({
     const dstIp = firstIp(sc.dstId) ?? sc.dstIp;
     const job = sim.ping(sc.srcId, dstIp, 1);
     settle();
-    set((st) => ({ scenarios: st.scenarios.map((s) => (s.id === id ? { ...s, dstIp, jobId: job.id } : s)) }));
+    set((st) => ({ scenarios: st.scenarios.map((s) => (s.id === id ? { ...s, dstIp, cmdId: job.cmdId! } : s)) }));
     bump();
   },
 
