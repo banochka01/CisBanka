@@ -22,10 +22,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     port: Number(env.PORT ?? 3000),
     host: env.HOST ?? '0.0.0.0',
-    dbPath: env.DB_PATH ?? resolve('data/cisbanka.db'),
+    dbPath: env.DB_PATH === ':memory:' ? ':memory:' : resolve(env.DB_PATH ?? 'data/cisbanka.db'),
     jwtSecret: jwtSecret || 'dev-secret-dev-secret-dev-secret-0000',
     adminInviteCode: adminInviteCode || 'dev-invite',
-    webDist: env.WEB_DIST ?? null,
+    webDist: env.WEB_DIST ? resolve(env.WEB_DIST) : null,
     loginRateLimit: Number(env.LOGIN_RATE_LIMIT ?? 10),
   };
 }

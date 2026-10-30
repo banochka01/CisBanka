@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  # Чистая машина: docker compose up -d --build с нуля, ждём healthcheck, проверяем HTTPS через Caddy и бэкап.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: .env
+        run: |
+          cp .env.example .env
+          sed -i "s/^DOMAIN=.*/DOMAIN=localhost/" .env
+          sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$(openssl rand -hex 32)/" .env
+          sed -i "s/^ADMIN_INVITE_CODE=.*/ADMIN_INVITE_CODE=ci-invite-code/" .env
+      - name: docker compose up -d --build
+        run: docker compose up -d --build
+      - name: Ждём healthy
+        run: |
+          for i in $(seq 1 40); do
+            s=$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q app)")
+            echo "app: $s"; [ "$s" = healthy ] && exit 0; sleep 3
+          done
+          docker compose logs; exit 1
+      - name: Smoke-тест через Caddy (HTTPS) и напрямую
+        run: |
+          sleep 5
+          curl -fsS http://127.0.0.1:3000/api/health
+          curl -fsSk https://localhost/api/health
+          curl -fsSk https://localhost/ | grep -q 'CisBanka'
+          curl -fsSk https://localhost/s/some-token | grep -q 'CisBanka'
+          code=$(curl -sk -o /dev/null -w '%{http_code}' -X POST https://localhost/api/auth/teacher/register -H 'Content-Type: application/json' -d '{"invite":"wrong","login":"t1","password":"password1"}')
+          [ "$code" = 403 ]
+          curl -fsSk -c jar -X POST https://localhost/api/auth/teacher/register -H 'Content-Type: application/json' \
+            -d '{"invite":"ci-invite-code","login":"teacher","password":"password1","name":"Учитель"}'
+          curl -fsSk -b jar -X POST https://localhost/api/classes -H 'Content-Type: application/json' -d '{"name":"9А"}'
+      - name: Бэкап
+        run: |
+          ./scripts/backup.sh
+          ls -la backups
+          test "$(ls backups/cisbanka-*.db | wc -l)" -ge 1
+      - name: Перезапуск сохраняет данные
+        run: |
+          docker compose down
+          docker compose up -d
+          for i in $(seq 1 40); do
+            s=$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q app)"); [ "$s" = healthy ] && break; sleep 3
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3000/api/auth/teacher/login -H 'Content-Type: application/json' -d '{"login":"teacher","password":"password1"}')
+          [ "$code" = 200 ]
+      - name: Логи при ошибке
+        if: failure()
+        run: docker compose logs

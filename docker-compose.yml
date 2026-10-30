@@ -1,0 +1,45 @@
+# CisBanka: приложение + Caddy (HTTPS от Let's Encrypt автоматически).
+# Запуск: docker compose up -d --build
+# Если 80/443 уже заняты другим прокси (nginx и т.п.) — только приложение:
+#   docker compose up -d --build app      (слушает 127.0.0.1:${APP_PORT:-3000})
+services:
+  app:
+    build: .
+    image: cisbanka:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DB_PATH: /data/cisbanka.db
+    volumes:
+      - cisbanka-data:/data
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  cisbanka-data:
+  caddy-data:
+  caddy-config:

@@ -16,7 +16,7 @@ const dir = opt('dir', '/data/backups');
 const { dbPath } = loadConfig({ ...process.env, NODE_ENV: 'backup' });
 
 mkdirSync(dir, { recursive: true });
-const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+const stamp = new Date().toISOString().replace(/[:T.]/g, '-').slice(0, 23);
 const file = join(dir, `cisbanka-${stamp}.db`);
 
 const db = new Database(dbPath, { readonly: true, fileMustExist: true });
