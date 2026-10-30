@@ -8,9 +8,16 @@ export interface Verdict {
   reason: string;
 }
 
+/** Кадр, который устройство отправило в порт в результате обработки. */
+export interface OutFrame {
+  portId: string;
+  packet: Packet;
+}
+
 /**
  * Запись журнала.
  * - frame: устройство получило кадр и что-то с ним сделало (verdict);
+ * - send: устройство само создало кадр (ping, DHCP, ARP по таймеру…) и отправило его;
  * - drop: кадр умер, не дойдя до провода (порт выключен, нет маршрута, ARP без ответа…);
  * - info: служебное сообщение;
  * - reset: состояние симуляции сброшено из-за изменения топологии/конфигурации.
@@ -18,7 +25,12 @@ export interface Verdict {
 export interface LogEntry {
   id: number;
   time: number;
-  kind: 'frame' | 'drop' | 'info' | 'reset';
+  kind: 'frame' | 'send' | 'drop' | 'info' | 'reset';
+  /**
+   * Номер шага движка, к которому относится запись: событие очереди №step.
+   * Записи от внешних команд (ping из окна) относятся к следующему шагу.
+   */
+  step: number;
   deviceId?: string;
   portId?: string;
   fromDeviceId?: string;
@@ -30,4 +42,6 @@ export interface LogEntry {
   packet?: Packet;
   action?: Action;
   reason: string;
+  /** Что устройство отправило дальше («Выход» в разборе пакета). */
+  out?: OutFrame[];
 }

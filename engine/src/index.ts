@@ -6,6 +6,8 @@ export * from './model/devices';
 export { checkCable, requiredCopperCable } from './l1/cabling';
 export { Simulator, LINK_DELAY, type SimOptions, type Led } from './sim/Simulator';
 export type { Job, JobKind } from './sim/state';
+export { describePacket } from './sim/describe';
+export { l3Interfaces } from './l3/stack';
 export { macTable, arpTable, routes, type MacRow, type ArpRow } from './sim/tables';
 export type { RouteRow } from './l3/stack';
 export * from './util/ip';

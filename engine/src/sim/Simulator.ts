@@ -8,6 +8,7 @@ import { emptyRuntime, type DeviceRuntime, type Job, type QEvent, type SimState 
 import { switchRx, hubRx } from '../l2/switching';
 import { l3Rx, onArpTimeout } from '../l3/stack';
 import * as apps from '../apps/jobs';
+import { describePacket } from './describe';
 
 /** Задержка передачи по проводу, мс модельного времени. */
 export const LINK_DELAY = 1;
@@ -65,6 +66,14 @@ export class Simulator {
    * реплей никогда не перешагивает через команду.
    */
   private checkpoints: { step: number; state: SimState; logLen: number }[] = [];
+  /**
+   * Границы «хопов» режима симуляции: hopMarks[k] — номер шага, которым закончился хоп k.
+   * hopMarks[0] — точка, с которой начали шагать (дальше назад шагать нельзя).
+   */
+  private hopMarks: number[] = [0];
+  /** Запись журнала, внутри обработки которой мы сейчас: исходящие кадры приписываются к ней. */
+  private current: LogEntry | null = null;
+  private inCommand = false;
 
   constructor(project: Project, opts: SimOptions = {}) {
     this.opts = { ...DEFAULTS, ...opts };
@@ -96,6 +105,7 @@ export class Simulator {
     this.load(project);
     this.state = this.freshState(this.state.time, this.state.nextId);
     this.checkpoints = [];
+    this.hopMarks = [0];
     this.addLog({
       kind: 'reset',
       reason: `${reason}: состояние симуляции сброшено — MAC- и ARP-таблицы очищены, пакеты в пути удалены, задачи остановлены`,
@@ -191,15 +201,16 @@ export class Simulator {
     q.splice(lo, 0, { ...ev, time, seq: this.state.seq++ } as QEvent);
   }
 
-  addLog(e: Omit<LogEntry, 'id' | 'time'>): LogEntry {
-    const entry = { id: this.log.length + 1, time: this.state.time, ...e } as LogEntry;
+  addLog(e: Omit<LogEntry, 'id' | 'time' | 'step'>): LogEntry {
+    const step = this.inCommand ? this.state.step + 1 : this.state.step;
+    const entry = { id: this.log.length + 1, time: this.state.time, step, ...e } as LogEntry;
     if (entry.packet) entry.protocol = protocolOf(entry.packet);
     this.log.push(entry);
     return entry;
   }
 
-  drop(deviceId: string, packet: Packet | undefined, reason: string) {
-    this.addLog({ kind: 'drop', deviceId, packet, action: 'drop', reason });
+  drop(deviceId: string, packet: Packet | undefined, reason: string, portId?: string) {
+    this.addLog({ kind: 'drop', deviceId, portId, packet, action: 'drop', reason });
   }
 
   /**
@@ -217,10 +228,24 @@ export class Simulator {
       if (!st.up) err = st.reason;
     }
     if (err || !link) {
-      if (!silent) this.drop(deviceId, packet, err!);
+      if (!silent) this.drop(deviceId, packet, err!, portId);
       return false;
     }
     const peer = link.a.portId === portId ? link.b : link.a;
+    const sent = { ...packet, id: this.nextId() };
+    if (this.current?.deviceId === deviceId) (this.current.out ??= []).push({ portId, packet: sent });
+    else {
+      const d = this.device(deviceId);
+      this.current = this.addLog({
+        kind: 'send',
+        deviceId,
+        portId,
+        packet: sent,
+        action: 'forward',
+        reason: `${d.name} создаёт пакет и отправляет его в ${port.name}. ${describePacket(sent)}`,
+        out: [{ portId, packet: sent }],
+      });
+    }
     this.schedule(LINK_DELAY, {
       kind: 'rx',
       deviceId: peer.deviceId,
@@ -229,7 +254,7 @@ export class Simulator {
       fromDeviceId: deviceId,
       fromPortId: portId,
       sentAt: this.state.time,
-      packet: { ...packet, id: this.nextId() },
+      packet: sent,
     });
     return true;
   }
@@ -246,7 +271,12 @@ export class Simulator {
   }
 
   stepBack(): boolean {
-    const target = this.state.step - 1;
+    if (this.state.step === 0) return false;
+    return this.seek(this.state.step - 1);
+  }
+
+  /** Восстановить состояние на шаге target: ближайший чекпоинт + детерминированный реплей. */
+  private seek(target: number): boolean {
     let i = this.checkpoints.length - 1;
     while (i >= 0 && this.checkpoints[i].step > target) i--;
     if (i < 0) return false;
@@ -269,9 +299,82 @@ export class Simulator {
 
   /** Внешняя команда: выполнить и сразу зафиксировать чекпоинт. */
   private command<T>(fn: () => T): T {
-    const r = fn();
-    this.checkpoint();
-    return r;
+    this.inCommand = true;
+    this.current = null;
+    try {
+      return fn();
+    } finally {
+      this.inCommand = false;
+      this.current = null;
+      this.checkpoint();
+    }
+  }
+
+  // ---------- режим симуляции: шаг = хоп ----------
+
+  /** Начать пошаговый режим с текущего состояния: назад дальше этой точки не шагаем. */
+  beginHops() {
+    this.hopMarks = [this.state.step];
+    if (this.checkpoints.at(-1)?.step !== this.state.step) this.checkpoint();
+  }
+
+  /** Номер текущего хопа (0 — ещё не шагали). */
+  get hop() {
+    return this.hopMarks.length - 1;
+  }
+
+  /**
+   * Один шаг режима симуляции — одно перемещение пакетов между устройствами.
+   * Обрабатываются служебные события (таймеры) до первого прихода кадра, затем —
+   * все кадры, пришедшие в тот же момент: при флуде копии двигаются одновременно.
+   * Возвращает новые записи журнала или null, если в сети ничего не происходит.
+   */
+  stepHop(): LogEntry[] | null {
+    if (!this.state.queue.length) return null;
+    const before = this.log.length;
+    let t: number | null = null;
+    while (this.state.queue.length) {
+      const ev = this.state.queue[0];
+      if (t !== null && !(ev.kind === 'rx' && ev.time === t)) break;
+      this.process(true);
+      if (ev.kind === 'rx') t = ev.time;
+    }
+    this.hopMarks.push(this.state.step);
+    return this.log.slice(before);
+  }
+
+  stepBackHop(): boolean {
+    return this.hop > 0 && this.seekHop(this.hop - 1);
+  }
+
+  /** Перемотать к концу хопа k (k ≤ текущего). */
+  seekHop(k: number): boolean {
+    if (k < 0 || k > this.hop) return false;
+    if (!this.seek(this.hopMarks[k])) return false;
+    this.hopMarks.length = k + 1;
+    return true;
+  }
+
+  /** Хоп, к которому относится запись журнала (−1 — до начала пошагового режима). */
+  hopOf(entry: LogEntry): number {
+    const m = this.hopMarks;
+    if (entry.step <= m[0]) return -1;
+    let lo = 1;
+    let hi = m.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (m[mid] >= entry.step) hi = mid;
+      else lo = mid + 1;
+    }
+    return lo < m.length && m[lo] >= entry.step ? lo : -1;
+  }
+
+  /** Записи журнала хопа k (по умолчанию текущего) — то, что показывается на холсте. */
+  hopEntries(k = this.hop): LogEntry[] {
+    if (k <= 0) return [];
+    const from = this.hopMarks[k - 1];
+    const to = this.hopMarks[k];
+    return this.log.filter((e) => e.step > from && e.step <= to);
   }
 
   /** Выполнять события до момента time включительно (без истории — режим реального времени). */
@@ -300,8 +403,10 @@ export class Simulator {
     this.state.step++;
     this.state.time = ev.time;
     const before = this.log.length;
+    this.current = null;
     if (ev.kind === 'rx') this.handleRx(ev);
     else apps.handleTimer(this, ev.deviceId, ev.timer, onArpTimeout);
+    this.current = null;
     return this.log.slice(before);
   }
 
@@ -319,6 +424,7 @@ export class Simulator {
       packet: ev.packet,
       reason: '',
     });
+    this.current = entry;
     const tick = Math.floor(ev.time);
     if (this.state.tick.t !== tick) this.state.tick = { t: tick, n: 0 };
     let v: Verdict;
