@@ -118,6 +118,8 @@ jobs:
             echo "JWT_SECRET=$(openssl rand -hex 32)"
             echo "ADMIN_INVITE_CODE=ci-invite-code"
           } > .env
+          # проверка сервера: на чистой машине порты свободны, образ доступен → код 0
+          ./scripts/check-vps.sh
           docker compose pull
           docker compose up -d
           for i in $(seq 1 40); do
@@ -128,3 +130,6 @@ jobs:
           curl -fsSk https://localhost/api/health
           ./scripts/backup.sh
           docker compose images
+          # повторно: 80/443 заняты нашим Caddy — это не ошибка
+          ./scripts/check-vps.sh
+          ./scripts/check-vps.sh --behind-proxy
