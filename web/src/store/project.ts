@@ -39,6 +39,9 @@ interface State {
   /** Растёт при открытии проекта — холст подгоняет масштаб. */
   loadSeq: number;
   theme: 'light' | 'dark';
+  /** Только просмотр (проект ученика у учителя, ссылка): правки топологии запрещены, симуляция — можно. */
+  readOnly: boolean;
+  setReadOnly: (v: boolean) => void;
 
   apply: (fn: (p: Project) => void, reason?: string) => void;
   loadProject: (p: Project) => void;
@@ -119,8 +122,14 @@ export const useStore = create<State>((set, get) => {
     simTick: 0,
     loadSeq: 0,
     theme: initialTheme(),
+    readOnly: false,
+
+    setReadOnly(v) {
+      set({ readOnly: v, cable: null, pending: null, picker: null, placing: null });
+    },
 
     apply(fn, reason = 'Топология или настройки изменены') {
+      if (get().readOnly) return;
       const prev = get().project;
       const next = structuredClone(prev);
       fn(next);
@@ -162,10 +171,12 @@ export const useStore = create<State>((set, get) => {
     },
 
     beginDrag() {
+      if (get().readOnly) return;
       if (!get().dragBase) set({ dragBase: get().project });
     },
 
     dragTo(id, pos) {
+      if (get().readOnly) return;
       // во время перетаскивания — без истории и без пересчёта симулятора
       set((s) => ({
         project: { ...s.project, devices: s.project.devices.map((d) => (d.id === id ? { ...d, position: pos } : d)) },

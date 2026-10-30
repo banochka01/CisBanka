@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { emptyProject, migrateProject } from '@ciscobanka/engine';
+import { emptyProject, migrateProject, type Project } from '@ciscobanka/engine';
 import { useStore } from './store/project';
 import { Canvas } from './canvas/Canvas';
 import { PortPicker } from './canvas/PortPicker';
@@ -9,6 +9,15 @@ import { WindowLayer } from './windows/WindowLayer';
 import { EXAMPLES } from './examples';
 import { useSim } from './store/sim';
 import { SimPanel } from './sim/SimPanel';
+import { startAutosave, useAccount } from './store/account';
+import { AccountBar, AccountDialogs, ReadOnlyBanner } from './account/AccountUI';
+
+/** Открыть новый/пример/импорт: текущий сохраняем, новый ещё не привязан к аккаунту. */
+async function startFresh(p: Project) {
+  await useAccount.getState().saveNow();
+  useAccount.getState().detach();
+  useStore.getState().loadProject(p);
+}
 
 function isTyping(e: KeyboardEvent) {
   const t = e.target as HTMLElement | null;
@@ -25,9 +34,15 @@ function useHotkeys() {
         if (useSim.getState().pdu) useSim.getState().togglePdu();
         return;
       }
-      if (isTyping(e)) return;
       const mod = e.ctrlKey || e.metaKey;
       const k = e.key.toLowerCase();
+      if (mod && (k === 's' || e.code === 'KeyS')) {
+        e.preventDefault();
+        if (useAccount.getState().user) void useAccount.getState().saveNow();
+        else useAccount.getState().openDialog('auth');
+        return;
+      }
+      if (isTyping(e)) return;
       // e.code — чтобы работало и в русской раскладке
       if (mod && (k === 'z' || e.code === 'KeyZ') && !e.shiftKey) {
         e.preventDefault();
@@ -47,7 +62,8 @@ function Toolbar() {
   const canUndo = useStore((s) => s.past.length > 0);
   const canRedo = useStore((s) => s.future.length > 0);
   const theme = useStore((s) => s.theme);
-  const { undo, redo, toggleTheme, loadProject } = useStore.getState();
+  const readOnly = useStore((s) => s.readOnly);
+  const { undo, redo, toggleTheme } = useStore.getState();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const exportJson = () => {
@@ -61,7 +77,7 @@ function Toolbar() {
 
   const importJson = async (f: File) => {
     try {
-      loadProject(migrateProject(JSON.parse(await f.text())));
+      await startFresh(migrateProject(JSON.parse(await f.text())));
     } catch (err) {
       alert(`Не удалось открыть файл: ${(err as Error).message}`);
     }
@@ -75,8 +91,14 @@ function Toolbar() {
         value={project.name}
         onChange={(e) => useStore.setState((s) => ({ project: { ...s.project, name: e.target.value } }))}
         aria-label="Название проекта"
+        readOnly={readOnly}
       />
-      <button className="btn" onClick={() => confirm('Начать новый проект? Несохранённые изменения пропадут.') && loadProject(emptyProject())}>
+      <button
+        className="btn"
+        onClick={() =>
+          (useAccount.getState().user || confirm('Начать новый проект? Несохранённые изменения пропадут.')) && void startFresh(emptyProject())
+        }
+      >
         Новый
       </button>
       <select
@@ -84,7 +106,7 @@ function Toolbar() {
         value=""
         onChange={(e) => {
           const ex = EXAMPLES[Number(e.target.value)];
-          if (ex) loadProject(ex.make());
+          if (ex) void startFresh(ex.make());
         }}
       >
         <option value="">Примеры…</option>
@@ -98,6 +120,7 @@ function Toolbar() {
       <button className="btn" onClick={() => fileRef.current?.click()}>Импорт JSON</button>
       <input ref={fileRef} type="file" accept=".json,application/json" hidden onChange={(e) => e.target.files?.[0] && importJson(e.target.files[0])} />
       <div className="spacer" />
+      <AccountBar />
       <button className="btn icon" onClick={undo} disabled={!canUndo} title="Отменить (Ctrl+Z)">↶</button>
       <button className="btn icon" onClick={redo} disabled={!canRedo} title="Повторить (Ctrl+Y)">↷</button>
       <button className="btn icon" onClick={toggleTheme} title="Сменить тему">{theme === 'dark' ? '☀' : '☾'}</button>
@@ -133,15 +156,21 @@ function StatusBar() {
 export function App() {
   useHotkeys();
   const theme = useStore((s) => s.theme);
+  const readOnly = useStore((s) => s.readOnly);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+  useEffect(() => {
+    void useAccount.getState().init();
+    return startAutosave();
+  }, []);
   return (
     <ReactFlowProvider>
       <div className="app">
         <Toolbar />
+        <ReadOnlyBanner />
         <div className="main">
-          <Palette />
+          {!readOnly && <Palette />}
           <Canvas />
           <SimPanel />
         </div>
@@ -149,6 +178,7 @@ export function App() {
       </div>
       <WindowLayer />
       <PortPicker />
+      <AccountDialogs />
     </ReactFlowProvider>
   );
 }

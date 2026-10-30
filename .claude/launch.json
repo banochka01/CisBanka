@@ -1,6 +1,7 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "web", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev", "-w", "web"], "port": 5173, "url": "http://127.0.0.1:5173" }
+    { "name": "web", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev", "-w", "web"], "port": 5173, "url": "http://127.0.0.1:5173" },
+    { "name": "server", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev", "-w", "server"], "port": 3000, "url": "http://127.0.0.1:3000" }
   ]
 }

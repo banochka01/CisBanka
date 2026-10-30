@@ -26,6 +26,7 @@ export function Canvas() {
   const simTick = useStore((s) => s.simTick);
   const cable = useStore((s) => s.cable);
   const placing = useStore((s) => s.placing);
+  const readOnly = useStore((s) => s.readOnly);
   const mode = useSim((s) => s.mode);
   const pdu = useSim((s) => s.pdu);
   const pduError = useSim((s) => s.pduError);
@@ -177,7 +178,8 @@ export function Canvas() {
           setSelNodes(new Set());
           setSelEdges(new Set());
         }}
-        deleteKeyCode={['Delete', 'Backspace']}
+        deleteKeyCode={readOnly ? null : ['Delete', 'Backspace']}
+        nodesDraggable={!readOnly}
         nodesConnectable={false}
         zoomOnDoubleClick={false}
         colorMode={theme}
