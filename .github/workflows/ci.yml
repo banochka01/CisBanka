@@ -52,7 +52,7 @@ jobs:
           curl -fsSk -b jar -X POST https://localhost/api/classes -H 'Content-Type: application/json' -d '{"name":"9А"}'
       - name: Бэкап
         run: |
-          ./scripts/backup.sh
+          ./scripts/backup.sh 2>&1 | tee backup.log; test "${PIPESTATUS[0]}" = 0
           ls -la backups
           test "$(ls backups/cisbanka-*.db | wc -l)" -ge 1
       - name: Перезапуск сохраняет данные
@@ -70,7 +70,7 @@ jobs:
           docker compose ps -a || true
           docker compose logs --no-color > compose.log 2>&1 || true
           # хвосты логов — в аннотации (их видно без входа в GitHub)
-          for f in up.log compose.log; do
+          for f in up.log backup.log compose.log; do
             [ -s "$f" ] && echo "::error title=$f::$(tail -n 60 "$f" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
           done
           true
