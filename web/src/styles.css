@@ -319,7 +319,8 @@ table.grid .field input { width: 120px; }
 
 /* Аккаунт */
 .account-bar { display: flex; align-items: center; gap: 6px; }
-.user-chip { font-size: 13px; padding: 0 4px; white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.user-chip { font: inherit; font-size: 13px; padding: 2px 6px; white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis; background: none; border: 1px solid transparent; border-radius: 6px; color: inherit; cursor: pointer; }
+.user-chip:hover { border-color: var(--border); }
 .save-state {
   display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; color: var(--muted);
   font: inherit; font-size: 12.5px; cursor: pointer; padding: 4px 6px; border-radius: 6px; white-space: nowrap;
@@ -370,3 +371,11 @@ table.grid tr.sel td { background: color-mix(in srgb, var(--accent) 10%, transpa
   .classes { grid-template-columns: 1fr; }
   .class-list { border-right: 0; padding-right: 0; }
 }
+
+/* ученики списком и выданные пароли */
+.add-students, .issued { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 8px 0; display: flex; flex-direction: column; gap: 8px; }
+.add-students textarea { width: 100%; box-sizing: border-box; font: inherit; resize: vertical; }
+.issued { border-color: var(--accent, #3b82f6); }
+.issued-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.issued td.mono { font-size: 14px; letter-spacing: .03em; }
+.ask-create p { margin: 0 0 6px; }

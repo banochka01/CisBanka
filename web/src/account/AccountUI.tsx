@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { api, shareUrl, type ClassInfo, type ProjectMeta, type Student } from '../api';
+import { api, ApiError, shareUrl, type ClassInfo, type IssuedCredentials, type ProjectMeta, type Student, type User } from '../api';
+import { downloadCsv, printSheet } from './credentialsSheet';
 import { useAccount, type SaveState } from '../store/account';
 import { useStore } from '../store/project';
 
@@ -43,9 +44,9 @@ export function AccountBar() {
         <>
           <button className="btn" onClick={() => openDialog('projects')}>Мои проекты</button>
           {user.role === 'teacher' && <button className="btn" onClick={() => openDialog('classes')}>Классы</button>}
-          <span className="user-chip" title={user.class ? `Класс ${user.class.name}` : 'Учитель'}>
+          <button className="user-chip" title={`${user.class ? `Класс ${user.class.name}` : 'Учитель'} · сменить пароль`} onClick={() => openDialog('password')}>
             {user.role === 'teacher' ? '👩‍🏫' : '🎓'} {user.name}
-          </span>
+          </button>
           <button className="btn ghost" onClick={() => void logout()}>Выйти</button>
         </>
       ) : (
@@ -98,7 +99,10 @@ function Modal({ title, onClose, children, wide }: { title: string; onClose: () 
 
 export function AccountDialogs() {
   const dialog = useAccount((s) => s.dialog);
+  const user = useAccount((s) => s.user);
   const close = () => useAccount.getState().openDialog(null);
+  if (user?.mustChangePassword) return <PasswordDialog forced onClose={() => void useAccount.getState().logout()} />;
+  if (dialog === 'password' && user) return <PasswordDialog onClose={close} />;
   if (dialog === 'auth') return <AuthDialog onClose={close} />;
   if (dialog === 'projects') return <ProjectsDialog onClose={close} />;
   if (dialog === 'classes') return <ClassesDialog onClose={close} />;
@@ -112,6 +116,8 @@ function AuthDialog({ onClose }: { onClose: () => void }) {
   const [f, setF] = useState({ code: '', login: '', password: '', name: '', invite: '' });
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  /** Ученика с таким логином нет, а класс разрешает регистрацию — спрашиваем «Создать аккаунт?». */
+  const [askCreate, setAskCreate] = useState(false);
   const field = (k: keyof typeof f, label: string, type = 'text', hint?: string) => (
     <label className="field">
       <span className="field-label">{label}</span>
@@ -120,26 +126,29 @@ function AuthDialog({ onClose }: { onClose: () => void }) {
     </label>
   );
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const attempt = async (fn: () => Promise<{ user: User }>) => {
     setErr('');
     setBusy(true);
     try {
-      const r =
-        tab === 'student'
-          ? await api.studentLogin(f.code.trim(), f.login.trim(), f.password, f.name.trim())
-          : tab === 'teacher'
-            ? await api.teacherLogin(f.login.trim(), f.password)
-            : await api.teacherRegister(f.invite.trim(), f.login.trim(), f.password, f.name.trim() || f.login.trim());
-      useAccount.getState().setUser(r.user);
-      // несохранённый локальный проект сразу уйдёт в аккаунт
-      useAccount.setState({ saveState: 'dirty' });
-      void useAccount.getState().saveNow();
+      signedIn((await fn()).user);
     } catch (ex) {
-      setErr((ex as Error).message);
+      if (ex instanceof ApiError && ex.body?.canRegister) setAskCreate(true);
+      else setErr((ex as Error).message);
     } finally {
       setBusy(false);
     }
+  };
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (tab === 'student' && askCreate) return void attempt(() => api.studentRegister(f.code.trim(), f.login.trim(), f.password, f.name.trim()));
+    void attempt(() =>
+      tab === 'student'
+        ? api.studentLogin(f.code.trim(), f.login.trim(), f.password)
+        : tab === 'teacher'
+          ? api.teacherLogin(f.login.trim(), f.password)
+          : api.teacherRegister(f.invite.trim(), f.login.trim(), f.password, f.name.trim() || f.login.trim()),
+    );
   };
 
   return (
@@ -152,19 +161,28 @@ function AuthDialog({ onClose }: { onClose: () => void }) {
             ['register', 'Регистрация учителя'],
           ] as const
         ).map(([k, t]) => (
-          <button key={k} className={`tab${tab === k ? ' active' : ''}`} onClick={() => setTab(k)} type="button">
+          <button key={k} className={`tab${tab === k ? ' active' : ''}`} onClick={() => (setTab(k), setAskCreate(false), setErr(''))} type="button">
             {t}
           </button>
         ))}
       </div>
       <form className="auth-form" onSubmit={submit}>
-        {tab === 'student' && (
+        {tab === 'student' && !askCreate && (
           <>
-            {field('code', 'Код класса', 'text', 'Его выдаёт учитель, например K7Q2MX')}
+            {field('code', 'Код класса', 'text', 'Код класса, логин и пароль выдаёт учитель')}
             {field('login', 'Логин')}
-            {field('password', 'Пароль', 'password', 'Первый вход с новым логином создаёт аккаунт — запомните пароль')}
-            {field('name', 'Имя и фамилия (при первом входе)')}
+            {field('password', 'Пароль', 'password')}
           </>
+        )}
+        {tab === 'student' && askCreate && (
+          <div className="ask-create">
+            <p>
+              Такого ученика нет: <b className="mono">{f.login.trim()}</b>. Создать аккаунт?
+            </p>
+            <p className="hint">Если учитель уже выдал вам логин — нажмите «Нет» и проверьте, как он написан.</p>
+            {field('name', 'Имя и фамилия (увидит учитель)')}
+            <p className="hint">Паролем станет тот, что вы ввели. Запомните его.</p>
+          </div>
         )}
         {tab === 'teacher' && (
           <>
@@ -181,9 +199,75 @@ function AuthDialog({ onClose }: { onClose: () => void }) {
           </>
         )}
         {err && <div className="bad">{err}</div>}
-        <button className="btn primary" disabled={busy}>
-          {busy ? 'Подождите…' : tab === 'register' ? 'Зарегистрироваться' : 'Войти'}
-        </button>
+        <div className="tools-row">
+          <button className="btn primary" disabled={busy}>
+            {busy ? 'Подождите…' : tab === 'register' ? 'Зарегистрироваться' : askCreate ? 'Да, создать аккаунт' : 'Войти'}
+          </button>
+          {askCreate && (
+            <button className="btn" type="button" onClick={() => setAskCreate(false)}>
+              Нет
+            </button>
+          )}
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/** После входа: несохранённый локальный проект сразу уйдёт в аккаунт (если не нужно сменить пароль). */
+function signedIn(user: User) {
+  useAccount.getState().setUser(user);
+  if (user.mustChangePassword) return;
+  useAccount.setState({ saveState: 'dirty' });
+  void useAccount.getState().saveNow();
+}
+
+/** Смена пароля; forced — после одноразового пароля, закрыть нельзя (только выйти). */
+function PasswordDialog({ forced, onClose }: { forced?: boolean; onClose: () => void }) {
+  const user = useAccount((s) => s.user)!;
+  const [f, setF] = useState({ current: '', password: '', repeat: '' });
+  const [err, setErr] = useState('');
+  const [done, setDone] = useState(false);
+  const min = user.role === 'teacher' ? 8 : 4;
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr('');
+    if (f.password.length < min) return setErr(`Пароль должен быть не короче ${min} символов`);
+    if (f.password !== f.repeat) return setErr('Пароли не совпадают');
+    try {
+      const r = await api.changePassword(f.password, forced ? undefined : f.current);
+      if (forced) signedIn(r.user);
+      else setDone(true);
+    } catch (ex) {
+      setErr((ex as Error).message);
+    }
+  };
+  const input = (k: keyof typeof f, label: string) => (
+    <label className="field">
+      <span className="field-label">{label}</span>
+      <input type="password" value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} autoComplete={k === 'current' ? 'current-password' : 'new-password'} />
+    </label>
+  );
+  return (
+    <Modal title={forced ? 'Придумайте свой пароль' : 'Смена пароля'} onClose={onClose}>
+      <form className="auth-form" onSubmit={submit}>
+        {forced && <p>Вы вошли по одноразовому паролю от учителя. Придумайте свой — дальше входите с ним.</p>}
+        {done ? (
+          <div className="ok">Пароль изменён.</div>
+        ) : (
+          <>
+            {!forced && input('current', 'Текущий пароль')}
+            {input('password', `Новый пароль (от ${min} символов)`)}
+            {input('repeat', 'Повторите новый пароль')}
+            {err && <div className="bad">{err}</div>}
+          </>
+        )}
+        <div className="tools-row">
+          {!done && <button className="btn primary">Сохранить пароль</button>}
+          <button className="btn" type="button" onClick={onClose}>
+            {forced ? 'Выйти' : 'Закрыть'}
+          </button>
+        </div>
       </form>
     </Modal>
   );
@@ -300,6 +384,10 @@ function ClassesDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('');
   const [err, setErr] = useState('');
   const [note, setNote] = useState('');
+  /** Панель «добавить списком» открыта: текст из textarea. */
+  const [adding, setAdding] = useState<string | null>(null);
+  /** Только что выданные логины/пароли — показываем один раз. */
+  const [issued, setIssued] = useState<{ rows: IssuedCredentials[]; oneTime: boolean } | null>(null);
 
   const loadClasses = () =>
     api.classes().then((r) => {
@@ -308,6 +396,8 @@ function ClassesDialog({ onClose }: { onClose: () => void }) {
     }, (e) => setErr(e.message));
   useEffect(() => void loadClasses(), []);
   useEffect(() => {
+    setAdding(null);
+    setIssued(null);
     if (sel) api.students(sel).then((r) => setStudents(r.students), (e) => setErr(e.message));
     else setStudents([]);
   }, [sel]);
@@ -331,6 +421,31 @@ function ClassesDialog({ onClose }: { onClose: () => void }) {
       const r = await api.assign(cls.id, title, p);
       setNote(`Задание «${title}» выдано: ${r.delivered} уч. Новые ученики класса получат его при входе.`);
       setStudents((await api.students(cls.id)).students);
+    });
+
+  const refresh = async (id: number) => {
+    setStudents((await api.students(id)).students);
+    await loadClasses();
+  };
+
+  const addList = () =>
+    run(async () => {
+      if (!cls || adding === null) return;
+      const names = adding.split(/\r?\n/).map((n) => n.trim()).filter(Boolean);
+      if (!names.length) return setErr('Вставьте имена — по одному в строке');
+      const r = await api.addStudents(cls.id, names);
+      setAdding(null);
+      setIssued({ rows: r.students, oneTime: false });
+      await refresh(cls.id);
+    });
+
+  const resetPassword = (s: Student) =>
+    confirm(`Выдать ${s.name} новый одноразовый пароль? Старый перестанет работать.`) &&
+    run(async () => {
+      if (!cls) return;
+      const { password } = await api.resetPassword(cls.id, s.id);
+      setIssued({ rows: [{ id: s.id, name: s.name, login: s.login, password }], oneTime: true });
+      await refresh(cls.id);
     });
 
   return (
@@ -376,16 +491,68 @@ function ClassesDialog({ onClose }: { onClose: () => void }) {
                       await loadClasses();
                     })}
                   />
-                  Принимать новых учеников
+                  Ученики могут зарегистрироваться сами
                 </label>
               </div>
               <div className="tools-row">
-                <button className="btn primary" onClick={() => void assign()} title="Каждый ученик получит свою копию текущего проекта">
+                <button className="btn primary" onClick={() => (setIssued(null), setAdding(adding ?? ''))}>
+                  + Ученики списком
+                </button>
+                <button className="btn" onClick={() => void assign()} title="Каждый ученик получит свою копию текущего проекта">
                   Раздать текущий проект как задание
                 </button>
               </div>
               {note && <div className="ok">{note}</div>}
-              {!students.length && <p className="muted">Учеников пока нет. Сообщите им код класса.</p>}
+              {adding !== null && (
+                <div className="add-students">
+                  <label className="field">
+                    <span className="field-label">Имена учеников — по одному в строке («Фамилия Имя»)</span>
+                    <textarea
+                      rows={8}
+                      autoFocus
+                      value={adding}
+                      onChange={(e) => setAdding(e.target.value)}
+                      placeholder={'Иванов Пётр\nСмирнова Анна\n…'}
+                    />
+                    <span className="hint">Логины и пароли придумает система. Список можно вставить из Excel или журнала.</span>
+                  </label>
+                  <div className="tools-row">
+                    <button className="btn primary" onClick={() => void addList()}>
+                      Создать {adding.split('\n').filter((n) => n.trim()).length || ''} уч.
+                    </button>
+                    <button className="btn" onClick={() => setAdding(null)}>Отмена</button>
+                  </div>
+                </div>
+              )}
+              {issued && (
+                <div className="issued">
+                  <div className="issued-head">
+                    <b>{issued.oneTime ? 'Новый одноразовый пароль' : `Создано учеников: ${issued.rows.length}`}</b>
+                    <span className="bad">Пароли видны только сейчас — распечатайте или скачайте.</span>
+                  </div>
+                  <table className="grid">
+                    <thead>
+                      <tr><th>Ученик</th><th>Логин</th><th>Пароль</th></tr>
+                    </thead>
+                    <tbody>
+                      {issued.rows.map((r) => (
+                        <tr key={r.id}>
+                          <td>{r.name}</td>
+                          <td className="mono">{r.login}</td>
+                          <td className="mono">{r.password}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="tools-row">
+                    <button className="btn primary" onClick={() => printSheet(issued.rows, cls, issued.oneTime)}>🖨 Печать карточек</button>
+                    <button className="btn" onClick={() => downloadCsv(issued.rows, cls)}>⬇ CSV</button>
+                    <button className="btn ghost" onClick={() => confirm('Пароли больше не будут видны. Закрыть?') && setIssued(null)}>Готово</button>
+                    <span className="hint">Код класса {cls.code}, адрес {location.host}</span>
+                  </div>
+                </div>
+              )}
+              {!students.length && adding === null && <p className="muted">Учеников пока нет. Нажмите «+ Ученики списком».</p>}
               {students.length > 0 && (
                 <table className="grid">
                   <thead>
@@ -397,6 +564,7 @@ function ClassesDialog({ onClose }: { onClose: () => void }) {
                         <td>
                           {s.name}
                           <div className="muted mono">{s.login}</div>
+                          {s.mustChangePassword && <span className="badge" title="Выдан одноразовый пароль, ученик ещё не вошёл">одноразовый пароль</span>}
                         </td>
                         <td>
                           {!s.projects.length && <span className="muted">нет</span>}
@@ -408,25 +576,15 @@ function ClassesDialog({ onClose }: { onClose: () => void }) {
                           ))}
                         </td>
                         <td className="nowrap">
-                          <button
-                            className="btn small"
-                            onClick={() => {
-                              const pw = prompt(`Новый пароль для ${s.name} (от 4 символов):`);
-                              if (pw) run(async () => {
-                                await api.resetPassword(cls.id, s.id, pw);
-                                setNote(`Пароль ученика ${s.name} изменён.`);
-                              });
-                            }}
-                          >
-                            Сменить пароль
+                          <button className="btn small" onClick={() => resetPassword(s)} title="Выдать новый одноразовый пароль">
+                            Сбросить пароль
                           </button>{' '}
                           <button
                             className="btn small"
                             title="Удалить ученика и его проекты"
                             onClick={() => confirm(`Удалить ученика ${s.name} и все его проекты?`) && run(async () => {
                               await api.removeStudent(cls.id, s.id);
-                              setStudents((await api.students(cls.id)).students);
-                              await loadClasses();
+                              await refresh(cls.id);
                             })}
                           >
                             ✕

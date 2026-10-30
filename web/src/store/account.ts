@@ -26,7 +26,7 @@ interface Account {
   lastSavedAt: number | null;
   /** Проект в момент последнего сохранения — сравниваем по ссылке (проект неизменяемый). */
   savedRef: Project | null;
-  dialog: 'auth' | 'projects' | 'classes' | null;
+  dialog: 'auth' | 'projects' | 'classes' | 'password' | null;
 
   init: () => Promise<void>;
   setUser: (u: User | null) => void;
@@ -54,7 +54,8 @@ export const useAccount = create<Account>((set, get) => ({
   async init() {
     const share = /^\/s\/([\w-]+)$/.exec(location.pathname)?.[1];
     try {
-      set({ user: (await api.me()).user });
+      // вошли раньше: проект на холсте ещё не в аккаунте — уйдёт при первом автосохранении
+      set({ user: (await api.me()).user, saveState: 'dirty' });
     } catch {
       /* не вошли — работаем локально */
     }
@@ -106,7 +107,7 @@ export const useAccount = create<Account>((set, get) => ({
   async saveNow() {
     const { user, doc, savedRef, saveState } = get();
     const project = useStore.getState().project;
-    if (!user || isReadOnly(doc) || saveState === 'saving') return;
+    if (!user || user.mustChangePassword || isReadOnly(doc) || saveState === 'saving') return;
     if (project === savedRef) return;
     // пустой новый проект на сервер не сохраняем
     if (doc.kind === 'local' && !project.devices.length) return;
@@ -155,7 +156,7 @@ export function startAutosave() {
   const t = setInterval(() => void useAccount.getState().saveNow(), AUTOSAVE_MS);
   const onUnload = (e: BeforeUnloadEvent) => {
     const a = useAccount.getState();
-    if (a.user && (a.saveState === 'dirty' || a.saveState === 'error')) {
+    if (a.user && !a.user.mustChangePassword && (a.saveState === 'dirty' || a.saveState === 'error')) {
       void a.saveNow();
       e.preventDefault();
     }
