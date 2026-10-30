@@ -3,11 +3,14 @@
   "private": true,
   "workspaces": [
     "engine",
-    "web"
+    "web",
+    "server"
   ],
   "scripts": {
-    "test": "npm run test -w engine",
-    "typecheck": "npm run typecheck -w engine",
-    "dev": "npm run dev -w web"
+    "test": "npm run test -w engine && npm run test -w server",
+    "typecheck": "npm run typecheck -w engine && npm run typecheck -w web && npm run typecheck -w server",
+    "dev": "npm run dev -w web",
+    "dev:server": "npm run dev -w server",
+    "build": "npm run build -w web && npm run build -w server"
   }
 }
