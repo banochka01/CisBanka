@@ -71,7 +71,6 @@ jobs:
           docker compose logs --no-color > compose.log 2>&1 || true
           # хвосты логов — в аннотации (их видно без входа в GitHub)
           for f in up.log compose.log; do
-            [ -s "$f" ] && echo "::error title=$f::$(tail -n 60 "$f" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/
-/%0A/g')"
+            [ -s "$f" ] && echo "::error title=$f::$(tail -n 60 "$f" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
           done
           true
