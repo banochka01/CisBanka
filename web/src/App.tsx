@@ -7,6 +7,8 @@ import { PortPicker } from './canvas/PortPicker';
 import { Palette } from './palette/Palette';
 import { WindowLayer } from './windows/WindowLayer';
 import { EXAMPLES } from './examples';
+import { useSim } from './store/sim';
+import { SimPanel } from './sim/SimPanel';
 
 function isTyping(e: KeyboardEvent) {
   const t = e.target as HTMLElement | null;
@@ -20,6 +22,7 @@ function useHotkeys() {
       if (e.key === 'Escape') {
         if (st.cable || st.pending || st.picker) st.cancelCable();
         if (st.placing) st.setPlacing(null);
+        if (useSim.getState().pdu) useSim.getState().togglePdu();
         return;
       }
       if (isTyping(e)) return;
@@ -105,14 +108,23 @@ function Toolbar() {
 function StatusBar() {
   const n = useStore((s) => s.project.devices.length);
   const l = useStore((s) => s.project.links.length);
+  const mode = useSim((s) => s.mode);
+  const switchMode = useSim((s) => s.switchMode);
   return (
     <footer className="statusbar">
       <div className="mode-switch" role="tablist">
-        <button className="active" role="tab" aria-selected>Реальное время</button>
-        <button role="tab" disabled title="Появится на следующем этапе">Симуляция</button>
+        <button className={mode === 'realtime' ? 'active' : ''} role="tab" aria-selected={mode === 'realtime'} onClick={() => switchMode('realtime')}>
+          Реальное время
+        </button>
+        <button className={mode === 'simulation' ? 'active' : ''} role="tab" aria-selected={mode === 'simulation'} onClick={() => switchMode('simulation')}>
+          Симуляция
+        </button>
       </div>
       <span className="muted">
-        Устройств: {n}, проводов: {l}. Двойной клик — настройка устройства, Delete — удалить, Ctrl+Z / Ctrl+Y — отмена/повтор.
+        Устройств: {n}, проводов: {l}.{' '}
+        {mode === 'simulation'
+          ? 'Пакеты идут по шагам: ⏭ — один хоп, ▶ — воспроизведение. Клик по конверту — разбор по OSI.'
+          : 'Двойной клик — настройка устройства, Delete — удалить, Ctrl+Z / Ctrl+Y — отмена/повтор.'}
       </span>
     </footer>
   );
@@ -131,6 +143,7 @@ export function App() {
         <div className="main">
           <Palette />
           <Canvas />
+          <SimPanel />
         </div>
         <StatusBar />
       </div>

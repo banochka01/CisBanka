@@ -14,17 +14,21 @@ import { useStore } from '../store/project';
 import { getSim } from '../sim/runtime';
 import { DeviceNode, type DeviceNodeType } from './DeviceNode';
 import { LinkEdge, type LinkEdgeType } from './LinkEdge';
+import { SimOverlay } from './SimOverlay';
+import { useSim } from '../store/sim';
+import { CENTER } from '../sim/visual';
 
 const nodeTypes = { device: DeviceNode };
 const edgeTypes = { link: LinkEdge };
-/** Центр иконки относительно левого верхнего угла узла. */
-const CENTER = { x: 40, y: 32 };
 
 export function Canvas() {
   const project = useStore((s) => s.project);
   const simTick = useStore((s) => s.simTick);
   const cable = useStore((s) => s.cable);
   const placing = useStore((s) => s.placing);
+  const mode = useSim((s) => s.mode);
+  const pdu = useSim((s) => s.pdu);
+  const pduError = useSim((s) => s.pduError);
   const pending = useStore((s) => s.pending);
   const theme = useStore((s) => s.theme);
   const [selNodes, setSelNodes] = useState<Set<string>>(new Set());
@@ -42,10 +46,10 @@ export function Canvas() {
         id: d.id,
         type: 'device',
         position: d.position,
-        data: { device: d, pending: pending?.deviceId === d.id },
+        data: { device: d, pending: pending?.deviceId === d.id || pdu?.srcId === d.id },
         selected: selNodes.has(d.id),
       })),
-    [project.devices, selNodes, pending],
+    [project.devices, selNodes, pending, pdu],
   );
 
   const edges: LinkEdgeType[] = useMemo(() => {
@@ -130,7 +134,7 @@ export function Canvas() {
 
   return (
     <div
-      className={`canvas${cable ? ' cable-mode' : ''}${placing ? ' placing' : ''}`}
+      className={`canvas${cable || pdu ? ' cable-mode' : ''}${placing ? ' placing' : ''}`}
       onDragOver={(e) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'copy';
@@ -147,10 +151,11 @@ export function Canvas() {
         onEdgesChange={onEdgesChange}
         onNodeDragStop={() => useStore.getState().endDrag()}
         onNodeClick={(e, n) => {
-          if (useStore.getState().cable) useStore.getState().openPicker(n.id, e.clientX, e.clientY);
+          if (useSim.getState().pdu) useSim.getState().pduClick(n.id);
+          else if (useStore.getState().cable) useStore.getState().openPicker(n.id, e.clientX, e.clientY);
         }}
         onNodeDoubleClick={(_, n) => {
-          if (!useStore.getState().cable) useStore.getState().openWindow(n.id);
+          if (!useStore.getState().cable && !useSim.getState().pdu) useStore.getState().openWindow(n.id);
         }}
         onPaneClick={(e) => {
           const st = useStore.getState();
@@ -183,6 +188,7 @@ export function Canvas() {
         <Background gap={24} />
         <Controls showInteractive={false} />
         <MiniMap pannable zoomable />
+        {mode === 'simulation' && <SimOverlay />}
         {pendingDev && mouse && (
           <ViewportPortal>
             <svg className="pending-wire" style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible' }}>
@@ -199,6 +205,12 @@ export function Canvas() {
           </ViewportPortal>
         )}
       </ReactFlow>
+      {pdu && (
+        <div className="canvas-hint">
+          ✉ Простой пакет (ping): {pdu.srcId ? 'кликните получателя' : 'кликните отправителя'}. Esc — отмена.
+          {pduError && <div className="bad">{pduError}</div>}
+        </div>
+      )}
     </div>
   );
 }

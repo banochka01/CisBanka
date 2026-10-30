@@ -318,6 +318,16 @@ export class Simulator {
     if (this.checkpoints.at(-1)?.step !== this.state.step) this.checkpoint();
   }
 
+  /**
+   * Выполнить служебные события, назначенные на «прямо сейчас» (таймер старта ping/DHCP
+   * сразу после команды), — чтобы созданный пакет стал виден у отправителя ещё до шага.
+   * Эти события входят в следующий хоп.
+   */
+  primeHop() {
+    const q = this.state.queue;
+    while (q.length && q[0].kind === 'timer' && q[0].time <= this.state.time) this.process(true);
+  }
+
   /** Номер текущего хопа (0 — ещё не шагали). */
   get hop() {
     return this.hopMarks.length - 1;

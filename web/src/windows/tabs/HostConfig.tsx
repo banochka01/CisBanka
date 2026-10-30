@@ -1,6 +1,6 @@
 import type { Device } from '@ciscobanka/engine';
 import { useStore } from '../../store/project';
-import { getSim } from '../../sim/runtime';
+import { getSim, settle } from '../../sim/runtime';
 import { Field, Toggle } from '../../ui/fields';
 import type { Upd } from './common';
 
@@ -50,7 +50,7 @@ export function HostConfig({ d, upd }: { d: Device; upd: Upd }) {
             onClick={() => {
               const sim = getSim();
               sim.renewDhcp(d.id);
-              sim.runUntilIdle();
+              settle();
               bumpSim();
             }}
           >

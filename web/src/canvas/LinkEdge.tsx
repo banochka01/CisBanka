@@ -2,6 +2,7 @@ import { memo, useState } from 'react';
 import { EdgeLabelRenderer, type Edge, type EdgeProps } from '@xyflow/react';
 import type { CableType, Led } from '@ciscobanka/engine';
 import { CABLE_LABELS } from '../ui/portInfo';
+import { exitDist } from '../sim/visual';
 
 export type LinkEdgeType = Edge<
   {
@@ -20,20 +21,9 @@ export type LinkEdgeType = Edge<
   'link'
 >;
 
-/**
- * Габариты узла относительно центра иконки: иконка 64×64, под ней имя.
- * Индикатор и подпись порта ставим сразу за краем узла, чтобы не наезжать на имя.
- */
-const NODE_BOX = { left: 42, right: 42, up: 36, down: 54 };
+// Индикатор и подпись порта ставим сразу за краем узла, чтобы не наезжать на имя.
 const LED_GAP = 8;
 const LABEL_GAP = 22;
-
-/** Расстояние от центра узла до края его рамки вдоль направления (ux, uy). */
-function exitDist(ux: number, uy: number) {
-  const tx = ux > 0 ? NODE_BOX.right / ux : ux < 0 ? NODE_BOX.left / -ux : Infinity;
-  const ty = uy > 0 ? NODE_BOX.down / uy : uy < 0 ? NODE_BOX.up / -uy : Infinity;
-  return Math.min(tx, ty);
-}
 const LED_COLORS: Record<Led, string> = { none: 'transparent', green: 'var(--led-green)', orange: 'var(--led-orange)', red: 'var(--led-red)' };
 
 export const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, targetY, data, selected }: EdgeProps<LinkEdgeType>) {

@@ -1,6 +1,7 @@
 import { DEVICE_LABELS, type CableType, type DeviceKind } from '@ciscobanka/engine';
 import { DeviceIcon } from '../canvas/icons';
 import { useStore } from '../store/project';
+import { useSim } from '../store/sim';
 import { CABLE_LABELS } from '../ui/portInfo';
 
 const KINDS: DeviceKind[] = ['router', 'switch', 'hub', 'pc', 'laptop', 'server'];
@@ -12,6 +13,8 @@ export function Palette() {
   const setCable = useStore((s) => s.setCable);
   const placing = useStore((s) => s.placing);
   const setPlacing = useStore((s) => s.setPlacing);
+  const pdu = useSim((s) => s.pdu);
+  const togglePdu = useSim((s) => s.togglePdu);
 
   return (
     <aside className="palette">
@@ -57,6 +60,11 @@ export function Palette() {
           {pending ? 'Теперь кликните второе устройство.' : 'Кликните первое устройство и выберите порт.'} Esc — отмена.
         </p>
       )}
+      <h3>Инструменты</h3>
+      <button className={`cable-btn${pdu ? ' active' : ''}`} onClick={togglePdu} title="Клик по отправителю, затем по получателю — уйдёт ping">
+        <span className="pdu-icon" aria-hidden>✉</span>
+        Простой пакет (ping)
+      </button>
       <p className="hint">
         ПК/сервер/роутер ↔ свитч/хаб — прямой кабель.
         <br />
