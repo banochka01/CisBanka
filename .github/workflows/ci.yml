@@ -30,7 +30,7 @@ jobs:
           sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$(openssl rand -hex 32)/" .env
           sed -i "s/^ADMIN_INVITE_CODE=.*/ADMIN_INVITE_CODE=ci-invite-code/" .env
       - name: docker compose up -d --build
-        run: docker compose up -d --build
+        run: docker compose up -d --build 2>&1 | tee up.log; exit ${PIPESTATUS[0]}
       - name: Ждём healthy
         run: |
           for i in $(seq 1 40); do
@@ -66,4 +66,12 @@ jobs:
           [ "$code" = 200 ]
       - name: Логи при ошибке
         if: failure()
-        run: docker compose logs
+        run: |
+          docker compose ps -a || true
+          docker compose logs --no-color > compose.log 2>&1 || true
+          # хвосты логов — в аннотации (их видно без входа в GitHub)
+          for f in up.log compose.log; do
+            [ -s "$f" ] && echo "::error title=$f::$(tail -n 60 "$f" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/
+/%0A/g')"
+          done
+          true
