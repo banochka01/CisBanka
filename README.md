@@ -49,6 +49,11 @@ npm run typecheck
 
 ## Развёртывание на VPS (Ubuntu) через Docker
 
+Образ собирается в GitHub Actions и публикуется в GHCR: `ghcr.io/banochka01/cisbanka`
+(теги `latest` — последний зелёный коммит в `main`, и `sha-<7 символов коммита>` — для отката).
+На сервере ничего не компилируется: `docker-compose.prod.yml` только скачивает готовый образ.
+Образ собран под `linux/amd64`.
+
 ### 1. Установить Docker
 
 ```bash
@@ -60,8 +65,7 @@ docker compose version          # должна быть v2
 ### 2. DNS: A-запись
 
 В панели регистратора домена создайте A-запись `cisbanka.example.ru → IP вашего VPS`
-(и AAAA, если есть IPv6). Дождитесь, пока `ping cisbanka.example.ru` покажет нужный IP —
-без этого Caddy не получит сертификат. Порты 80 и 443 должны быть открыты в файрволе:
+(и AAAA, если есть IPv6) — без неё Caddy не получит сертификат. Порты 80 и 443 должны быть открыты в файрволе:
 
 ```bash
 sudo ufw allow 80,443/tcp && sudo ufw allow 443/udp
@@ -69,30 +73,54 @@ sudo ufw allow 80,443/tcp && sudo ufw allow 443/udp
 
 ### 3. Склонировать и настроить `.env`
 
+Из репозитория на сервере нужны только `docker-compose.prod.yml`, `Caddyfile`, `.env.example` и `scripts/` —
+проще склонировать целиком:
+
 ```bash
 git clone https://github.com/banochka01/CisBanka.git && cd CisBanka
 cp .env.example .env
+sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$(openssl rand -hex 32)/" .env
+echo "COMPOSE_FILE=docker-compose.prod.yml" >> .env
+nano .env
 ```
-
-Заполните `.env`:
 
 | Переменная | Что это |
 |---|---|
 | `DOMAIN` | ваш домен из A-записи, например `cisbanka.example.ru` |
 | `JWT_SECRET` | секрет сессий, сгенерируйте: `openssl rand -hex 32` |
 | `ADMIN_INVITE_CODE` | код приглашения учителей (от 8 символов), сообщайте только учителям |
+| `COMPOSE_FILE` | `docker-compose.prod.yml` — тогда все команды ниже (и `scripts/backup.sh`) работают с готовым образом |
+| `CISBANKA_TAG` | версия образа: `latest` (по умолчанию) или `sha-abc1234` |
 | `APP_PORT` | порт приложения на `127.0.0.1` хоста (по умолчанию 3000) |
+| `APP_MEM_LIMIT` | потолок памяти контейнера приложения (по умолчанию `512m`) |
 | `LOGIN_RATE_LIMIT` | попыток входа в минуту с одного IP (по умолчанию 10) |
 
+### 4. Проверить сервер
+
 ```bash
-sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$(openssl rand -hex 32)/" .env
-nano .env
+./scripts/check-vps.sh
 ```
 
-### 4. Запустить
+Скрипт проверит Docker и compose, свободны ли порты 80/443, хватает ли RAM и диска,
+указывает ли `DOMAIN` на IP этого сервера и заполнен ли `.env`. В конце — список, что исправить.
+
+### 5. Доступ к образу в GHCR
+
+Вариант А — сделать пакет публичным (один раз, тогда логин на сервере не нужен):
+GitHub → профиль → **Packages** → `cisbanka` → **Package settings** → **Change visibility** → Public.
+
+Вариант Б — оставить приватным и залогиниться на сервере. Создайте на GitHub
+(Settings → Developer settings → Personal access tokens → Tokens (classic)) токен только с правом `read:packages`:
 
 ```bash
-docker compose up -d --build
+echo "ВАШ_ТОКЕН" | docker login ghcr.io -u banochka01 --password-stdin
+```
+
+### 6. Запустить
+
+```bash
+docker compose pull
+docker compose up -d
 ```
 
 Поднимутся два контейнера: `app` (Node.js, SQLite) и `caddy` (HTTPS, сертификат Let's Encrypt выпускается сам).
@@ -106,25 +134,36 @@ curl -s https://cisbanka.example.ru/api/health
 Откройте `https://ваш-домен`, нажмите «Войти» → «Регистрация учителя» и введите `ADMIN_INVITE_CODE`.
 
 База и бэкапы лежат в docker-томе `cisbanka-data` (`/data` в контейнере), сертификаты — в томе `caddy-data`.
+У контейнеров есть потолок памяти (`app` — 512 МБ, `caddy` — 128 МБ) и ротация логов (3 × 10 МБ),
+чтобы не мешать соседним сервисам.
 
-### 5. Обновить
+### 7. Обновить
+
+После пуша в `main` дождитесь зелёного CI (джоб `publish`), затем на сервере:
 
 ```bash
 cd CisBanka
 ./scripts/backup.sh              # на всякий случай
-git pull
-docker compose up -d --build
+git pull                         # если менялись compose/Caddyfile/скрипты
+docker compose pull
+docker compose up -d
 docker image prune -f            # удалить старые образы
 ```
 
-Схема базы мигрирует автоматически при старте.
+Схема базы мигрирует автоматически при старте. Откат на прошлую версию: `CISBANKA_TAG=sha-<коммит>` в `.env`,
+затем `docker compose up -d`.
+
+### Сборка на самом сервере (без GHCR)
+
+Если сервер мощный или нужен свой форк: без `COMPOSE_FILE` в `.env` используется `docker-compose.yml`,
+который собирает образ локально — `docker compose up -d --build`.
 
 ## Если порты 80/443 уже заняты (nginx или другой сервис)
 
 Caddy не нужен — запускайте только приложение, оно слушает `127.0.0.1:${APP_PORT}` (по умолчанию 3000):
 
 ```bash
-docker compose up -d --build app
+docker compose up -d app
 ```
 
 И добавьте сайт в существующий прокси. Пример для nginx (`/etc/nginx/sites-available/cisbanka`):
