@@ -8,6 +8,7 @@ import { hash, verify } from '@node-rs/argon2';
 import { randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { Config } from './config.js';
+import { makeLogin, makePassword } from './credentials.js';
 import type { DB } from './db.js';
 
 type Role = 'teacher' | 'student';
@@ -19,6 +20,7 @@ interface UserRow {
   name: string;
   password_hash: string;
   class_id: number | null;
+  must_change_password: number;
 }
 
 declare module '@fastify/jwt' {
@@ -40,10 +42,14 @@ class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly extra?: Record<string, unknown>,
   ) {
     super(message);
   }
 }
+
+/** Сколько учеников можно завести одним списком. */
+const MAX_BATCH = 100;
 
 const bad = (msg: string) => new HttpError(400, msg);
 const forbidden = (msg = 'Нет доступа') => new HttpError(403, msg);
@@ -83,7 +89,7 @@ function safeEqual(a: string, b: string) {
 
 const publicUser = (u: UserRow, db: DB) => {
   const cls = u.class_id ? (db.prepare('SELECT id, name, code FROM classes WHERE id = ?').get(u.class_id) as { id: number; name: string; code: string }) : null;
-  return { id: u.id, role: u.role, login: u.login, name: u.name, class: cls };
+  return { id: u.id, role: u.role, login: u.login, name: u.name, class: cls, mustChangePassword: !!u.must_change_password };
 };
 
 export async function buildApp(db: DB, cfg: Config) {
@@ -94,7 +100,7 @@ export async function buildApp(db: DB, cfg: Config) {
   await app.register(rateLimit, { global: false });
 
   app.setErrorHandler((err: Error & { statusCode?: number; validation?: unknown }, _req, reply) => {
-    if (err instanceof HttpError) return reply.status(err.status).send({ error: err.message });
+    if (err instanceof HttpError) return reply.status(err.status).send({ error: err.message, ...err.extra });
     if (err.statusCode === 429) return reply.status(429).send({ error: 'Слишком много попыток входа. Подождите минуту.' });
     if (err.statusCode === 413) return reply.status(413).send({ error: 'Проект слишком большой' });
     if (err.statusCode && err.statusCode < 500) return reply.status(err.statusCode).send({ error: err.message });
@@ -123,6 +129,7 @@ export async function buildApp(db: DB, cfg: Config) {
   async function requireUser(req: FastifyRequest, role?: Role): Promise<UserRow> {
     const u = await currentUser(req);
     if (!u) throw new HttpError(401, 'Войдите в аккаунт');
+    if (u.must_change_password) throw forbidden('Сначала задайте новый пароль');
     if (role && u.role !== role) throw forbidden(role === 'teacher' ? 'Только для учителя' : 'Только для ученика');
     return u;
   }
@@ -164,32 +171,62 @@ export async function buildApp(db: DB, cfg: Config) {
     return { user: publicUser(u, db) };
   });
 
+  const classByCode = (v: unknown) => {
+    const code = str(v, 'код класса', 16).toUpperCase();
+    const cls = db.prepare('SELECT * FROM classes WHERE code = ?').get(code) as { id: number; join_open: number } | undefined;
+    if (!cls) throw new HttpError(401, 'Класс с таким кодом не найден');
+    return cls;
+  };
+
   /**
-   * Ученик: код класса + логин + пароль. Первый вход с новым логином создаёт аккаунт —
-   * только если учитель не закрыл приём в класс. Открытой регистрации без кода нет.
+   * Ученик: код класса + логин + пароль. Аккаунты заводит учитель списком.
+   * Неизвестный логин — ошибка; если учитель разрешил самостоятельную регистрацию,
+   * ответ подсказывает клиенту спросить «Создать аккаунт?».
    */
   app.post('/api/auth/student/login', { config: loginLimit }, async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const code = str(b.classCode, 'код класса', 16).toUpperCase();
+    const cls = classByCode(b.classCode);
+    const login = str(b.login, 'логин', 32);
+    const password = typeof b.password === 'string' ? b.password : '';
+    const u = db.prepare(`SELECT * FROM users WHERE role = 'student' AND class_id = ? AND lower(login) = lower(?)`).get(cls.id, login) as UserRow | undefined;
+    if (!u) {
+      if (cls.join_open) throw new HttpError(404, 'Такого ученика нет', { canRegister: true });
+      throw new HttpError(401, 'Такого ученика нет в классе. Логин и пароль выдаёт учитель.');
+    }
+    if (!(await verify(u.password_hash, password))) throw new HttpError(401, 'Неверный пароль');
+    await setSession(reply, u.id);
+    return { user: publicUser(u, db) };
+  });
+
+  /** Самостоятельная регистрация в классе — только если учитель её включил. */
+  app.post('/api/auth/student/register', { config: loginLimit }, async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const cls = classByCode(b.classCode);
+    if (!cls.join_open) throw forbidden('В этом классе ученики не регистрируются сами — логин и пароль выдаёт учитель');
     const login = checkLogin(b.login);
     const password = checkPassword(b.password, 4);
-    const cls = db.prepare('SELECT * FROM classes WHERE code = ?').get(code) as { id: number; join_open: number } | undefined;
-    if (!cls) throw new HttpError(401, 'Класс с таким кодом не найден');
-    let u = db.prepare(`SELECT * FROM users WHERE role = 'student' AND class_id = ? AND lower(login) = lower(?)`).get(cls.id, login) as UserRow | undefined;
-    let created = false;
-    if (u) {
-      if (!(await verify(u.password_hash, password))) throw new HttpError(401, 'Неверный пароль');
-    } else {
-      if (!cls.join_open) throw forbidden('Учитель закрыл приём новых учеников в этот класс');
-      const name = typeof b.name === 'string' && b.name.trim() ? str(b.name, 'имя', 80) : login;
-      const r = db
-        .prepare(`INSERT INTO users (role, login, name, password_hash, class_id, created_at) VALUES ('student', ?, ?, ?, ?, ?)`)
-        .run(login, name, await hash(password), cls.id, Date.now());
-      u = userById(Number(r.lastInsertRowid))!;
-      created = true;
-    }
+    const name = typeof b.name === 'string' && b.name.trim() ? str(b.name, 'имя', 80) : login;
+    if (db.prepare(`SELECT 1 FROM users WHERE role = 'student' AND class_id = ? AND lower(login) = lower(?)`).get(cls.id, login))
+      throw new HttpError(409, 'Ученик с таким логином уже есть');
+    const r = db
+      .prepare(`INSERT INTO users (role, login, name, password_hash, class_id, created_at) VALUES ('student', ?, ?, ?, ?, ?)`)
+      .run(login, name, await hash(password), cls.id, Date.now());
+    const u = userById(Number(r.lastInsertRowid))!;
     await setSession(reply, u.id);
-    return { user: publicUser(u, db), created };
+    return { user: publicUser(u, db) };
+  });
+
+  /** Смена пароля. После одноразового пароля — обязательна, старый не спрашиваем (его только что ввели). */
+  app.post('/api/auth/password', { config: loginLimit }, async (req) => {
+    const u = await currentUser(req);
+    if (!u) throw new HttpError(401, 'Войдите в аккаунт');
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    if (!u.must_change_password && !(typeof b.current === 'string' && (await verify(u.password_hash, b.current))))
+      throw new HttpError(401, 'Неверный текущий пароль');
+    const password = checkPassword(b.password, u.role === 'teacher' ? 8 : 4);
+    if (await verify(u.password_hash, password)) throw bad('Новый пароль совпадает с прежним');
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(await hash(password), u.id);
+    return { user: publicUser(userById(u.id)!, db) };
   });
 
   app.post('/api/auth/logout', async (_req, reply) => {
@@ -198,7 +235,8 @@ export async function buildApp(db: DB, cfg: Config) {
   });
 
   app.get('/api/auth/me', async (req) => {
-    const u = await requireUser(req);
+    const u = await currentUser(req);
+    if (!u) throw new HttpError(401, 'Войдите в аккаунт');
     return { user: publicUser(u, db) };
   });
 
@@ -236,8 +274,8 @@ export async function buildApp(db: DB, cfg: Config) {
     const t = await requireUser(req, 'teacher');
     const name = str((req.body as Record<string, unknown>)?.name, 'название класса', 80);
     const code = newCode();
-    const r = db.prepare('INSERT INTO classes (teacher_id, name, code, created_at) VALUES (?, ?, ?, ?)').run(t.id, name, code, Date.now());
-    return { class: { id: Number(r.lastInsertRowid), name, code, joinOpen: true, students: 0 } };
+    const r = db.prepare('INSERT INTO classes (teacher_id, name, code, join_open, created_at) VALUES (?, ?, ?, 0, ?)').run(t.id, name, code, Date.now());
+    return { class: { id: Number(r.lastInsertRowid), name, code, joinOpen: false, students: 0 } };
   });
 
   app.patch('/api/classes/:id', async (req) => {
@@ -252,19 +290,55 @@ export async function buildApp(db: DB, cfg: Config) {
   app.get('/api/classes/:id/students', async (req) => {
     const t = await requireUser(req, 'teacher');
     const c = ownClass(t, Number((req.params as { id: string }).id));
-    const students = db.prepare(`SELECT id, login, name FROM users WHERE class_id = ? ORDER BY lower(name)`).all(c.id) as { id: number }[];
+    const students = db
+      .prepare(`SELECT id, login, name, must_change_password AS mustChangePassword FROM users WHERE class_id = ? ORDER BY lower(name)`)
+      .all(c.id) as { id: number; mustChangePassword: number }[];
     const projects = db.prepare('SELECT id, name, assignment_id AS assignmentId, updated_at AS updatedAt FROM projects WHERE owner_id = ? ORDER BY updated_at DESC');
-    return { students: students.map((s) => ({ ...s, projects: projects.all(s.id) })) };
+    return { students: students.map((s) => ({ ...s, mustChangePassword: !!s.mustChangePassword, projects: projects.all(s.id) })) };
   });
 
+  /**
+   * Завести учеников списком имён: логины и пароли генерируются.
+   * Пароли возвращаются один раз (в базе только хеш) — для печати и CSV.
+   */
+  app.post('/api/classes/:id/students', async (req) => {
+    const t = await requireUser(req, 'teacher');
+    const c = ownClass(t, Number((req.params as { id: string }).id));
+    const raw = (req.body as Record<string, unknown>)?.names;
+    if (!Array.isArray(raw)) throw bad('Нужен список имён');
+    const names = raw.map((n) => (typeof n === 'string' ? n.replace(/\s+/g, ' ').trim() : '')).filter(Boolean);
+    if (!names.length) throw bad('Список имён пуст');
+    if (names.length > MAX_BATCH) throw bad(`Не больше ${MAX_BATCH} учеников за раз`);
+    for (const n of names) if (n.length > 80) throw bad(`Слишком длинное имя: «${n.slice(0, 30)}…»`);
+
+    const exists = db.prepare(`SELECT 1 FROM users WHERE role = 'student' AND class_id = ? AND lower(login) = lower(?)`);
+    const ins = db.prepare(`INSERT INTO users (role, login, name, password_hash, class_id, created_at) VALUES ('student', ?, ?, ?, ?, ?)`);
+    const planned = new Set<string>();
+    const rows = names.map((name) => {
+      const login = makeLogin(name, (l) => planned.has(l) || !!exists.get(c.id, l));
+      planned.add(login);
+      return { name, login, password: makePassword() };
+    });
+    const hashes = await Promise.all(rows.map((r) => hash(r.password)));
+    const now = Date.now();
+    const created = db.transaction(() =>
+      rows.map((r, i) => ({ id: Number(ins.run(r.login, r.name, hashes[i], c.id, now).lastInsertRowid), ...r })),
+    )();
+    for (const s of created) materializeAssignments(s.id, c.id);
+    return { students: created };
+  });
+
+  /** Сброс пароля: выдаём новый одноразовый — при входе ученик задаст свой. */
   app.post('/api/classes/:id/students/:sid/password', async (req) => {
     const t = await requireUser(req, 'teacher');
     const p = req.params as { id: string; sid: string };
     const c = ownClass(t, Number(p.id));
-    const password = checkPassword((req.body as Record<string, unknown>)?.password, 4);
-    const r = db.prepare(`UPDATE users SET password_hash = ? WHERE id = ? AND class_id = ? AND role = 'student'`).run(await hash(password), Number(p.sid), c.id);
+    const password = makePassword();
+    const r = db
+      .prepare(`UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ? AND class_id = ? AND role = 'student'`)
+      .run(await hash(password), Number(p.sid), c.id);
     if (!r.changes) throw notFound('Ученик не найден');
-    return { ok: true };
+    return { password };
   });
 
   app.delete('/api/classes/:id/students/:sid', async (req) => {

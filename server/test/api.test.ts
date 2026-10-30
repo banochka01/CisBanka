@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app';
 import { loadConfig } from '../src/config';
 import { openDb } from '../src/db';
+import { makeLogin } from '../src/credentials';
 
 process.env.NODE_ENV = 'test';
 
@@ -34,6 +35,19 @@ async function teacherWithClass() {
   return { t, cls };
 }
 
+/** Учитель заводит учеников списком; возвращает выданные логины/пароли. */
+async function addStudents(t: ReturnType<typeof client>, classId: number, names: string[]) {
+  const r = await t.call('POST', `/api/classes/${classId}/students`, { names });
+  expect(r.status).toBe(200);
+  return r.body.students as { id: number; name: string; login: string; password: string }[];
+}
+
+async function studentClient(code: string, login: string, password: string) {
+  const s = client();
+  expect((await s.call('POST', '/api/auth/student/login', { classCode: code, login, password })).status).toBe(200);
+  return s;
+}
+
 describe('API', () => {
   it('healthcheck', async () => {
     expect((await client().call('GET', '/api/health')).body).toEqual({ ok: true });
@@ -43,35 +57,90 @@ describe('API', () => {
     const c = client();
     expect((await c.call('POST', '/api/auth/teacher/register', { invite: 'wrong', login: 'x1', password: 'password1' })).status).toBe(403);
     expect((await c.call('POST', '/api/auth/student/login', { classCode: 'NOPE00', login: 'vasya', password: '1234' })).status).toBe(401);
+    expect((await c.call('POST', '/api/auth/student/register', { classCode: 'NOPE00', login: 'vasya', password: '1234' })).status).toBe(401);
     expect((await c.call('GET', '/api/auth/me')).status).toBe(401);
   });
 
-  it('ученик входит по коду класса + логину; повторный вход проверяет пароль; закрытый приём', async () => {
+  it('логины из имён: латиница, без повторов', () => {
+    const taken = new Set(['ivanov.p']);
+    expect(makeLogin('Иванов Пётр', (l) => taken.has(l))).toBe('ivanov.p2');
+    expect(makeLogin('Щукина  Юлия', () => false)).toBe('shchukina.y');
+    expect(makeLogin('Ёж', () => false)).toBe('ezh');
+    expect(makeLogin('!!', () => false)).toBe('student');
+  });
+
+  it('учитель заводит учеников списком; автосоздания по новому логину нет', async () => {
     const { t, cls } = await teacherWithClass();
-    const s = client();
-    const r = await s.call('POST', '/api/auth/student/login', { classCode: cls.code.toLowerCase(), login: 'vasya', password: '1234', name: 'Вася' });
-    expect(r.status).toBe(200);
-    expect(r.body.created).toBe(true);
-    expect(r.body.user).toMatchObject({ role: 'student', name: 'Вася', class: { code: cls.code } });
-    expect((await client().call('POST', '/api/auth/student/login', { classCode: cls.code, login: 'Vasya', password: 'wrong' })).status).toBe(401);
-    expect((await client().call('POST', '/api/auth/student/login', { classCode: cls.code, login: 'vasya', password: '1234' })).body.created).toBe(false);
-    await t.call('PATCH', `/api/classes/${cls.id}`, { joinOpen: false });
-    expect((await client().call('POST', '/api/auth/student/login', { classCode: cls.code, login: 'petya', password: '1234' })).status).toBe(403);
+    const list = await addStudents(t, cls.id, ['Иванов Пётр', '  ', 'Иванов Павел', 'Смирнова Анна']);
+    expect(list.map((x) => x.login)).toEqual(['ivanov.p', 'ivanov.p2', 'smirnova.a']);
+    expect(list.every((x) => /^[a-z]{4}\d{4}$/.test(x.password))).toBe(true);
+    // повторная загрузка того же имени не ломает уникальность
+    expect((await addStudents(t, cls.id, ['Иванов Пётр']))[0].login).toBe('ivanov.p3');
+
+    const s = await studentClient(cls.code.toLowerCase(), 'Ivanov.P', list[0].password);
+    expect((await s.call('GET', '/api/auth/me')).body.user).toMatchObject({ role: 'student', name: 'Иванов Пётр', mustChangePassword: false });
+    expect((await client().call('POST', '/api/auth/student/login', { classCode: cls.code, login: 'ivanov.p', password: 'wrong' })).status).toBe(401);
+
+    // новый логин не создаёт аккаунт
+    const r = await client().call('POST', '/api/auth/student/login', { classCode: cls.code, login: 'vasya', password: '1234' });
+    expect(r.status).toBe(401);
+    expect(r.body.canRegister).toBeUndefined();
+    expect((await client().call('POST', '/api/auth/student/register', { classCode: cls.code, login: 'vasya', password: '1234' })).status).toBe(403);
     // ученику нельзя в учительские разделы
     expect((await s.call('GET', '/api/classes')).status).toBe(403);
+    expect((await s.call('POST', `/api/classes/${cls.id}/students`, { names: ['Хакер'] })).status).toBe(403);
+  });
+
+  it('самостоятельная регистрация в классе — только если учитель включил, с подтверждением', async () => {
+    const { t, cls } = await teacherWithClass();
+    expect(cls.joinOpen).toBe(false);
+    await t.call('PATCH', `/api/classes/${cls.id}`, { joinOpen: true });
+    const r = await client().call('POST', '/api/auth/student/login', { classCode: cls.code, login: 'vasya', password: '1234' });
+    expect(r.status).toBe(404);
+    expect(r.body).toMatchObject({ error: 'Такого ученика нет', canRegister: true });
+    const s = client();
+    const reg = await s.call('POST', '/api/auth/student/register', { classCode: cls.code, login: 'vasya', password: '1234', name: 'Вася' });
+    expect(reg.status).toBe(200);
+    expect(reg.body.user).toMatchObject({ name: 'Вася', class: { code: cls.code } });
+    expect((await client().call('POST', '/api/auth/student/register', { classCode: cls.code, login: 'VASYA', password: '1234' })).status).toBe(409);
+    await studentClient(cls.code, 'vasya', '1234');
+  });
+
+  it('сброс пароля выдаёт одноразовый: после входа ученик обязан задать свой', async () => {
+    const { t, cls } = await teacherWithClass();
+    const [st] = await addStudents(t, cls.id, ['Петров Олег']);
+    const r = await t.call('POST', `/api/classes/${cls.id}/students/${st.id}/password`);
+    expect(r.body.password).toMatch(/^[a-z]{4}\d{4}$/);
+    expect((await client().call('POST', '/api/auth/student/login', { classCode: cls.code, login: st.login, password: st.password })).status).toBe(401);
+
+    const s = await studentClient(cls.code, st.login, r.body.password);
+    expect((await s.call('GET', '/api/auth/me')).body.user.mustChangePassword).toBe(true);
+    expect((await t.call('GET', `/api/classes/${cls.id}/students`)).body.students[0].mustChangePassword).toBe(true);
+    // пока не сменил — работать нельзя
+    expect((await s.call('GET', '/api/projects')).status).toBe(403);
+    expect((await s.call('POST', '/api/auth/password', { password: r.body.password })).status).toBe(400);
+    const ch = await s.call('POST', '/api/auth/password', { password: 'мой-пароль' });
+    expect(ch.body.user.mustChangePassword).toBe(false);
+    expect((await s.call('GET', '/api/projects')).status).toBe(200);
+    // одноразовый больше не подходит, новый — да
+    expect((await client().call('POST', '/api/auth/student/login', { classCode: cls.code, login: st.login, password: r.body.password })).status).toBe(401);
+    await studentClient(cls.code, st.login, 'мой-пароль');
+    // обычная смена пароля требует текущий
+    expect((await s.call('POST', '/api/auth/password', { password: 'другой' })).status).toBe(401);
+    expect((await s.call('POST', '/api/auth/password', { current: 'мой-пароль', password: 'другой' })).status).toBe(200);
   });
 
   it('учитель видит проекты учеников своего класса только на чтение; чужой учитель — нет', async () => {
     const { t, cls } = await teacherWithClass();
-    const s = client();
-    await s.call('POST', '/api/auth/student/login', { classCode: cls.code, login: 'vasya', password: '1234' });
+    const [st] = await addStudents(t, cls.id, ['Вася']);
+    const s = await studentClient(cls.code, st.login, st.password);
     const { id } = (await s.call('POST', '/api/projects', { name: 'Моя сеть', data: project() })).body;
 
     const list = (await t.call('GET', `/api/classes/${cls.id}/students`)).body.students;
     expect(list[0].projects[0]).toMatchObject({ id, name: 'Моя сеть' });
     const p = (await t.call('GET', `/api/projects/${id}`)).body;
     expect(p.readOnly).toBe(true);
-    expect(p.owner.login).toBe('vasya');
+    expect(p.owner.login).toBe(st.login);
     expect((await t.call('PUT', `/api/projects/${id}`, { data: project('взлом') })).status).toBe(403);
 
     const other = client();
@@ -82,13 +151,13 @@ describe('API', () => {
 
   it('задание раздаётся всему классу, включая учеников, пришедших позже', async () => {
     const { t, cls } = await teacherWithClass();
-    const a = client();
-    await a.call('POST', '/api/auth/student/login', { classCode: cls.code, login: 'anya', password: '1234' });
+    const [anya] = await addStudents(t, cls.id, ['Аня']);
+    const a = await studentClient(cls.code, anya.login, anya.password);
     const r = await t.call('POST', `/api/classes/${cls.id}/assignments`, { title: 'Задание 1: VLAN', data: project('VLAN') });
     expect(r.body.delivered).toBe(1);
     expect((await a.call('GET', '/api/projects')).body.projects[0]).toMatchObject({ name: 'Задание 1: VLAN', assignmentId: r.body.assignment.id });
-    const b = client();
-    await b.call('POST', '/api/auth/student/login', { classCode: cls.code, login: 'boris', password: '1234' });
+    const [boris] = await addStudents(t, cls.id, ['Борис']);
+    const b = await studentClient(cls.code, boris.login, boris.password);
     const bp = (await b.call('GET', '/api/projects')).body.projects;
     expect(bp).toHaveLength(1);
     // повторный запрос не плодит копии

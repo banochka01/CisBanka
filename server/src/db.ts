@@ -47,6 +47,12 @@ const MIGRATIONS: string[] = [
   CREATE INDEX ix_projects_owner ON projects(owner_id);
   CREATE UNIQUE INDEX ux_projects_assignment ON projects(owner_id, assignment_id) WHERE assignment_id IS NOT NULL;
   `,
+  // 2: учеников заводит учитель списком; самостоятельная регистрация в классе — по желанию (по умолчанию выключена);
+  //    пароль после сброса одноразовый — при входе ученик задаёт свой
+  `
+  ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0;
+  UPDATE classes SET join_open = 0;
+  `,
 ];
 
 export function openDb(path: string): DB {
