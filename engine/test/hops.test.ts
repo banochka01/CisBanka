@@ -60,7 +60,67 @@ describe('режим симуляции: шаг = хоп', () => {
     expect(JSON.stringify([sim.log, sim.state])).toBe(ref);
     while (sim.stepBackHop());
     expect(sim.hop).toBe(0);
-    expect(sim.hopOf(first)).toBe(-1);
+    // будущее не потеряно: просчитанные хопы и журнал на месте
+    expect(sim.hopCount).toBe(12);
+    expect(sim.hopOf(first)).toBe(1);
+  });
+
+  it('перемотка не теряет будущее; команды переигрываются, перемотка раньше отправки не удаляет пакет', () => {
+    const { b, pc1, pc2 } = twoSubnets();
+    const sim = new Simulator(b.project, { checkpointEvery: 4 });
+    sim.beginHops();
+    sim.ping(pc1.id, '192.168.2.10', 1);
+    sim.primeHop();
+    for (let i = 0; i < 5; i++) sim.stepHop();
+    // вторая команда посреди симуляции — «Простой пакет» с ПК2
+    const job2 = sim.ping(pc2.id, '192.168.1.10', 1);
+    const cmd2 = sim.commands[1];
+    expect(cmd2).toMatchObject({ kind: 'ping', deviceId: pc2.id, step: sim.state.step, time: sim.now });
+    sim.primeHop();
+    while (sim.stepHop());
+    const total = sim.hopCount;
+    const ref = JSON.stringify([sim.log, sim.state]);
+    expect(sim.commandJob(cmd2.id)?.id).toBe(job2.id);
+    expect(sim.commandJob(cmd2.id)?.results?.[1]).toBe('ok');
+
+    // назад к хопу 2 — раньше второй команды: её задачи ещё нет, но команда и будущее целы
+    expect(sim.seekHop(2)).toBe(true);
+    expect(sim.commandJob(cmd2.id)).toBeUndefined();
+    expect(sim.commands).toHaveLength(2);
+    expect(sim.hopCount).toBe(total);
+    expect(sim.logCursor).toBeLessThan(sim.log.length);
+    const future = sim.log.slice(sim.logCursor).map((e) => e.id);
+    expect(future.length).toBeGreaterThan(0);
+
+    // назад к хопу 5 — ровно момент отправки: пакет снова у отправителя, задача есть
+    expect(sim.seekHop(5)).toBe(true);
+    expect(sim.commandJob(cmd2.id)?.done).toBe(false);
+    expect(sim.pending.some((e) => e.kind === 'rx' && e.fromDeviceId === pc2.id)).toBe(true);
+
+    // назад до начала и вперёд по серому будущему — тот же журнал и состояние
+    expect(sim.seekHop(0)).toBe(true);
+    expect(sim.commandJob(sim.commands[0].id)).toBeDefined();
+    while (sim.stepHop());
+    expect(sim.hop).toBe(total);
+    expect(JSON.stringify([sim.log, sim.state])).toBe(ref);
+
+    // перемотка вперёд кликом по будущей строке журнала
+    sim.seekHop(1);
+    expect(sim.seekHop(7)).toBe(true);
+    expect(sim.hop).toBe(7);
+  });
+
+  it('новая команда в прошлом отменяет просчитанное будущее', () => {
+    const { b, pc1 } = twoSubnets();
+    const sim = new Simulator(b.project);
+    sim.beginHops();
+    sim.ping(pc1.id, '192.168.2.10', 1);
+    while (sim.stepHop());
+    sim.seekHop(3);
+    sim.ping(pc1.id, '192.168.1.1', 1);
+    expect(sim.hopCount).toBe(3);
+    expect(sim.logCursor).toBe(sim.log.length);
+    expect(sim.commands).toHaveLength(2);
   });
 
   it('сброс кадра у отправителя (нет кабеля) знает порт — для крестика у порта', () => {

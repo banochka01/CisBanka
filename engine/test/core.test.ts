@@ -28,7 +28,9 @@ describe('детерминизм и шаг назад', () => {
     const ref = JSON.stringify(sim.log);
     const refState = JSON.stringify(sim.state);
     for (let i = 0; i < 12; i++) expect(sim.stepBack()).toBe(true);
-    expect(sim.log.length).toBeLessThan(JSON.parse(ref).length);
+    // будущее не потеряно: журнал целиком на месте, «настоящее» короче
+    expect(sim.log.length).toBe(JSON.parse(ref).length);
+    expect(sim.logCursor).toBeLessThan(sim.log.length);
     for (let i = 0; i < 12; i++) sim.step();
     expect(JSON.stringify(sim.log)).toBe(ref);
     expect(JSON.stringify(sim.state)).toBe(refState);
@@ -44,11 +46,11 @@ describe('детерминизм и шаг назад', () => {
     const ref = JSON.stringify([sim.log, sim.state]);
     while (sim.stepBack());
     expect(sim.state.step).toBe(0);
+    // команда в момент 0 осталась, вторая (шаг 10) ещё не наступила, но не забыта
     expect(Object.keys(sim.state.jobs)).toHaveLength(1);
-    // вперёд: до шага 10, повторяем команду, ещё 25
-    for (let i = 0; i < 10; i++) sim.step();
-    sim.ping(pc2.id, '192.168.1.10', 1);
-    for (let i = 0; i < 25; i++) sim.step();
+    expect(sim.commands).toHaveLength(2);
+    // вперёд: команда на шаге 10 переигрывается сама
+    for (let i = 0; i < 35; i++) sim.step();
     expect(JSON.stringify([sim.log, sim.state])).toBe(ref);
   });
 

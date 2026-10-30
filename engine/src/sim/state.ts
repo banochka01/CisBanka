@@ -70,6 +70,25 @@ export interface Job {
   // http
   path?: string;
   srcPort?: number;
+  /** Внешняя команда, которая запустила задачу (для сценариев «Простой пакет»). */
+  cmdId?: number;
+}
+
+export type CommandKind = 'ping' | 'traceroute' | 'http' | 'nslookup' | 'dhcp';
+
+/**
+ * Внешняя команда пользователя (ping из окна, «Простой пакет», запрос DHCP).
+ * Пишется в историю с моментом выдачи и переигрывается при реплее.
+ */
+export interface CommandRec {
+  id: number;
+  /** Выполнена после события №step (перед событием step+1). */
+  step: number;
+  time: number;
+  kind: CommandKind;
+  deviceId: string;
+  target: string;
+  count?: number;
 }
 
 export type Timer =
@@ -109,6 +128,10 @@ export interface SimState {
   rt: Record<string, DeviceRuntime>;
   jobs: Record<number, Job>;
   tick: { t: number; n: number };
+  /** Сколько команд из истории уже выполнено. */
+  cmdApplied: number;
+  /** id команды → id задачи, которую она запустила. */
+  cmdJobs: Record<number, number>;
 }
 
 export function emptyRuntime(): DeviceRuntime {

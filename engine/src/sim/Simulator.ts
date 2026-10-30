@@ -4,7 +4,7 @@ import { protocolOf } from '../model/packet';
 import type { LogEntry, Verdict } from '../model/events';
 import { checkCable } from '../l1/cabling';
 import { mulberry32 } from '../util/prng';
-import { emptyRuntime, type DeviceRuntime, type Job, type QEvent, type SimState } from './state';
+import { emptyRuntime, type CommandKind, type CommandRec, type DeviceRuntime, type Job, type QEvent, type SimState } from './state';
 import { switchRx, hubRx } from '../l2/switching';
 import { l3Rx, onArpTimeout } from '../l3/stack';
 import * as apps from '../apps/jobs';
@@ -61,9 +61,9 @@ export class Simulator {
    * История для шага назад. Полный снапшот на каждом шаге дорог (~1,5 мс и ~40 КБ
    * на 30 устройствах), поэтому храним чекпоинты раз в N шагов, а шаг назад —
    * это восстановление ближайшего чекпоинта и детерминированный реплей событий
-   * (PRNG живёт в состоянии). Внешние команды (ping, renewDhcp…) не являются
-   * событиями очереди, поэтому сразу после них делается внеочередной чекпоинт:
-   * реплей никогда не перешагивает через команду.
+   * (PRNG живёт в состоянии). Внешние команды (ping, renewDhcp…) пишутся в историю
+   * (cmds) с номером шага и переигрываются при реплее; после команды — внеочередной чекпоинт.
+   * При перемотке назад журнал, чекпоинты и границы хопов «будущего» не удаляются.
    */
   private checkpoints: { step: number; state: SimState; logLen: number }[] = [];
   /**
@@ -71,6 +71,12 @@ export class Simulator {
    * hopMarks[0] — точка, с которой начали шагать (дальше назад шагать нельзя).
    */
   private hopMarks: number[] = [0];
+  /** Текущий хоп; хопы дальше него — просчитанное будущее. */
+  private hopIdx = 0;
+  /** Длина журнала «в настоящем» (см. logCursor). */
+  private cursor = 0;
+  private cmds: CommandRec[] = [];
+  private cmdSeq = 0;
   /** Запись журнала, внутри обработки которой мы сейчас: исходящие кадры приписываются к ней. */
   private current: LogEntry | null = null;
   private inCommand = false;
@@ -103,9 +109,12 @@ export class Simulator {
   /** Применить изменённую топологию/конфиг: Runtime сбрасывается с пометкой в журнале. */
   setTopology(project: Project, reason = 'Топология или настройки изменены') {
     this.load(project);
+    this.log.length = this.cursor;
     this.state = this.freshState(this.state.time, this.state.nextId);
     this.checkpoints = [];
     this.hopMarks = [0];
+    this.hopIdx = 0;
+    this.cmds = [];
     this.addLog({
       kind: 'reset',
       reason: `${reason}: состояние симуляции сброшено — MAC- и ARP-таблицы очищены, пакеты в пути удалены, задачи остановлены`,
@@ -115,7 +124,7 @@ export class Simulator {
   }
 
   private freshState(time: number, nextId = 1): SimState {
-    return { time, step: 0, seq: 0, nextId, rng: this.project.seed >>> 0, queue: [], rt: {}, jobs: {}, tick: { t: -1, n: 0 } };
+    return { time, step: 0, seq: 0, nextId, rng: this.project.seed >>> 0, queue: [], rt: {}, jobs: {}, tick: { t: -1, n: 0 }, cmdApplied: 0, cmdJobs: {} };
   }
 
   /** При старте хосты с DHCP сами запрашивают адрес. */
@@ -203,9 +212,10 @@ export class Simulator {
 
   addLog(e: Omit<LogEntry, 'id' | 'time' | 'step'>): LogEntry {
     const step = this.inCommand ? this.state.step + 1 : this.state.step;
-    const entry = { id: this.log.length + 1, time: this.state.time, step, ...e } as LogEntry;
+    const entry = { id: this.cursor + 1, time: this.state.time, step, ...e } as LogEntry;
     if (entry.packet) entry.protocol = protocolOf(entry.packet);
-    this.log.push(entry);
+    // в «прошлом» реплей детерминирован — перезаписываем ту же запись будущего
+    this.log[this.cursor++] = entry;
     return entry;
   }
 
@@ -265,6 +275,26 @@ export class Simulator {
     return this.state.queue;
   }
 
+  /**
+   * Сколько записей журнала относится к настоящему моменту. Записи дальше — «будущее»,
+   * которое уже было просчитано: после перемотки назад оно не теряется, а шаг вперёд
+   * детерминированно воспроизводит его заново (записи перезаписываются теми же).
+   */
+  get logCursor() {
+    return this.cursor;
+  }
+
+  /** История внешних команд (для отображения и сценариев). */
+  get commands(): readonly CommandRec[] {
+    return this.cmds;
+  }
+
+  /** Задача, запущенная командой cmdId в текущем состоянии (нет — команда ещё не выполнена). */
+  commandJob(cmdId: number): Job | undefined {
+    const id = this.state.cmdJobs[cmdId];
+    return id === undefined ? undefined : this.state.jobs[id];
+  }
+
   /** Обработать одно событие. Возвращает новые записи журнала или null, если очередь пуста. */
   step(): LogEntry[] | null {
     return this.process(true);
@@ -275,16 +305,20 @@ export class Simulator {
     return this.seek(this.state.step - 1);
   }
 
-  /** Восстановить состояние на шаге target: ближайший чекпоинт + детерминированный реплей. */
+  /**
+   * Восстановить состояние на шаге target: ближайший чекпоинт + детерминированный реплей
+   * событий и внешних команд. Команды, выданные ровно в момент target, тоже выполняются —
+   * перемотка «до отправки» показывает пакет у отправителя, а не удаляет его.
+   */
   private seek(target: number): boolean {
     let i = this.checkpoints.length - 1;
     while (i >= 0 && this.checkpoints[i].step > target) i--;
     if (i < 0) return false;
-    this.checkpoints.length = i + 1;
     const cp = this.checkpoints[i];
     this.state = structuredClone(cp.state);
-    this.log.length = cp.logLen;
-    while (this.state.step < target) this.process(false);
+    this.cursor = cp.logLen;
+    while (this.state.step < target && this.process(false));
+    this.applyCommands();
     return true;
   }
 
@@ -292,30 +326,75 @@ export class Simulator {
     return this.state.step > 0 && this.checkpoints.length > 0 && this.checkpoints[0].step < this.state.step;
   }
 
+  /**
+   * Чекпоинт только на «переднем крае»: если впереди уже есть чекпоинты (идём по
+   * просчитанному будущему), новые не нужны — старые остаются верными.
+   */
   private checkpoint() {
-    this.checkpoints.push({ step: this.state.step, state: structuredClone(this.state), logLen: this.log.length });
+    const last = this.checkpoints.at(-1);
+    if (last && (last.step > this.state.step || (last.step === this.state.step && last.state.cmdApplied >= this.state.cmdApplied))) return;
+    this.checkpoints.push({ step: this.state.step, state: structuredClone(this.state), logLen: this.cursor });
     if (this.checkpoints.length > this.opts.maxCheckpoints) this.checkpoints.shift();
   }
 
-  /** Внешняя команда: выполнить и сразу зафиксировать чекпоинт. */
-  private command<T>(fn: () => T): T {
+  /** Забыть просчитанное будущее (новая команда в прошлом меняет дальнейшие события). */
+  dropFuture() {
+    this.log.length = this.cursor;
+    this.hopMarks.length = this.hopIdx + 1;
+    this.cmds.length = this.state.cmdApplied;
+    const s = this.state;
+    this.checkpoints = this.checkpoints.filter((c) => c.step < s.step || (c.step === s.step && c.state.cmdApplied <= s.cmdApplied));
+  }
+
+  private runCommand(c: CommandRec): Job {
     this.inCommand = true;
     this.current = null;
     try {
-      return fn();
+      let job: Job;
+      if (c.kind === 'ping') job = apps.startPing(this, c.deviceId, c.target, c.count ?? 4);
+      else if (c.kind === 'traceroute') job = apps.startTraceroute(this, c.deviceId, c.target);
+      else if (c.kind === 'http') job = apps.startHttp(this, c.deviceId, c.target);
+      else if (c.kind === 'nslookup') job = apps.startNslookup(this, c.deviceId, c.target);
+      else job = apps.startDhcp(this, c.deviceId);
+      job.cmdId = c.id;
+      this.state.cmdJobs[c.id] = job.id;
+      this.state.cmdApplied++;
+      return job;
     } finally {
       this.inCommand = false;
       this.current = null;
-      this.checkpoint();
     }
+  }
+
+  /** Выполнить команды из истории, чей момент настал. Возвращает true, если что-то выполнено. */
+  private applyCommands(): boolean {
+    let any = false;
+    while (this.state.cmdApplied < this.cmds.length && this.cmds[this.state.cmdApplied].step <= this.state.step) {
+      this.runCommand(this.cmds[this.state.cmdApplied]);
+      any = true;
+    }
+    return any;
+  }
+
+  /** Внешняя команда: записать в историю с текущим моментом, выполнить и зафиксировать чекпоинт. */
+  private command(kind: CommandKind, deviceId: string, target: string, count?: number): Job {
+    this.applyCommands();
+    this.dropFuture();
+    const c: CommandRec = { id: ++this.cmdSeq, step: this.state.step, time: this.state.time, kind, deviceId, target, count };
+    this.cmds.push(c);
+    const job = this.runCommand(c);
+    this.checkpoint();
+    return job;
   }
 
   // ---------- режим симуляции: шаг = хоп ----------
 
   /** Начать пошаговый режим с текущего состояния: назад дальше этой точки не шагаем. */
   beginHops() {
+    this.dropFuture();
     this.hopMarks = [this.state.step];
-    if (this.checkpoints.at(-1)?.step !== this.state.step) this.checkpoint();
+    this.hopIdx = 0;
+    this.checkpoint();
   }
 
   /**
@@ -330,38 +409,64 @@ export class Simulator {
 
   /** Номер текущего хопа (0 — ещё не шагали). */
   get hop() {
+    return this.hopIdx;
+  }
+
+  /** Сколько хопов уже просчитано (включая «будущее» после перемотки назад). */
+  get hopCount() {
     return this.hopMarks.length - 1;
+  }
+
+  get canStepForward() {
+    return this.hopIdx < this.hopCount || this.state.queue.length > 0;
   }
 
   /**
    * Один шаг режима симуляции — одно перемещение пакетов между устройствами.
    * Обрабатываются служебные события (таймеры) до первого прихода кадра, затем —
    * все кадры, пришедшие в тот же момент: при флуде копии двигаются одновременно.
+   * Если этот хоп уже был просчитан (после перемотки), идём ровно до его границы.
    * Возвращает новые записи журнала или null, если в сети ничего не происходит.
    */
   stepHop(): LogEntry[] | null {
-    if (!this.state.queue.length) return null;
-    const before = this.log.length;
-    let t: number | null = null;
-    while (this.state.queue.length) {
-      const ev = this.state.queue[0];
-      if (t !== null && !(ev.kind === 'rx' && ev.time === t)) break;
-      this.process(true);
-      if (ev.kind === 'rx') t = ev.time;
+    const before = this.cursor;
+    if (this.hopIdx < this.hopCount) {
+      const target = this.hopMarks[this.hopIdx + 1];
+      while (this.state.step < target && this.process(true));
+    } else {
+      if (!this.state.queue.length) return null;
+      let t: number | null = null;
+      while (this.state.queue.length) {
+        const ev = this.state.queue[0];
+        if (t !== null && !(ev.kind === 'rx' && ev.time === t)) break;
+        this.process(true);
+        if (ev.kind === 'rx') t = ev.time;
+      }
+      this.hopMarks.push(this.state.step);
     }
-    this.hopMarks.push(this.state.step);
-    return this.log.slice(before);
+    this.hopIdx++;
+    // команда, выданная после этого хопа, — сразу показать её пакет у отправителя
+    if (this.applyCommands()) {
+      this.checkpoint();
+      this.primeHop();
+    }
+    return this.log.slice(before, this.cursor);
   }
 
   stepBackHop(): boolean {
-    return this.hop > 0 && this.seekHop(this.hop - 1);
+    return this.hopIdx > 0 && this.seekHop(this.hopIdx - 1);
   }
 
-  /** Перемотать к концу хопа k (k ≤ текущего). */
+  /** Перемотать к концу хопа k — назад или вперёд по уже просчитанному будущему. */
   seekHop(k: number): boolean {
-    if (k < 0 || k > this.hop) return false;
+    if (k < 0 || k > this.hopCount) return false;
+    if (k > this.hopIdx) {
+      while (this.hopIdx < k) this.stepHop();
+      return true;
+    }
     if (!this.seek(this.hopMarks[k])) return false;
-    this.hopMarks.length = k + 1;
+    this.hopIdx = k;
+    this.primeHop();
     return true;
   }
 
@@ -380,7 +485,7 @@ export class Simulator {
   }
 
   /** Записи журнала хопа k (по умолчанию текущего) — то, что показывается на холсте. */
-  hopEntries(k = this.hop): LogEntry[] {
+  hopEntries(k = this.hopIdx): LogEntry[] {
     if (k <= 0) return [];
     const from = this.hopMarks[k - 1];
     const to = this.hopMarks[k];
@@ -404,20 +509,19 @@ export class Simulator {
   }
 
   private process(withHistory: boolean): LogEntry[] | null {
+    if (this.applyCommands() && withHistory) this.checkpoint();
     const ev = this.state.queue[0];
     if (!ev) return null;
-    if (withHistory && this.state.step % this.opts.checkpointEvery === 0 && this.checkpoints.at(-1)?.step !== this.state.step) {
-      this.checkpoint();
-    }
+    if (withHistory && this.state.step % this.opts.checkpointEvery === 0) this.checkpoint();
     this.state.queue.shift();
     this.state.step++;
     this.state.time = ev.time;
-    const before = this.log.length;
+    const before = this.cursor;
     this.current = null;
     if (ev.kind === 'rx') this.handleRx(ev);
     else apps.handleTimer(this, ev.deviceId, ev.timer, onArpTimeout);
     this.current = null;
-    return this.log.slice(before);
+    return this.log.slice(before, this.cursor);
   }
 
   private handleRx(ev: Extract<QEvent, { kind: 'rx' }>) {
@@ -453,22 +557,22 @@ export class Simulator {
   // ---------- инструменты (вкладка «Инструменты» на ПК) ----------
 
   ping(deviceId: string, target: string, count = 4): Job {
-    return this.command(() => apps.startPing(this, deviceId, target, count));
+    return this.command('ping', deviceId, target, count);
   }
 
   traceroute(deviceId: string, target: string): Job {
-    return this.command(() => apps.startTraceroute(this, deviceId, target));
+    return this.command('traceroute', deviceId, target);
   }
 
   openUrl(deviceId: string, url: string): Job {
-    return this.command(() => apps.startHttp(this, deviceId, url));
+    return this.command('http', deviceId, url);
   }
 
   nslookup(deviceId: string, name: string): Job {
-    return this.command(() => apps.startNslookup(this, deviceId, name));
+    return this.command('nslookup', deviceId, name);
   }
 
   renewDhcp(deviceId: string): Job {
-    return this.command(() => apps.startDhcp(this, deviceId));
+    return this.command('dhcp', deviceId, 'DHCP');
   }
 }
