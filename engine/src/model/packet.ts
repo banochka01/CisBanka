@@ -18,6 +18,8 @@ export interface IcmpPayload {
   id: number;
   seq: number;
   original?: { src: IPv4; dst: IPv4 };
+  /** Для ошибок — исходный IP-пакет (в ICMP вкладываются его заголовок и первые 8 байт данных). */
+  originalPacket?: IpBody;
 }
 
 export interface DhcpPayload {
@@ -51,6 +53,26 @@ export interface HttpPayload {
   body?: string;
 }
 
+/** UDP-порты или TCP-сегмент. */
+export interface L4 {
+  srcPort: number;
+  dstPort: number;
+  flags?: TcpFlag[];
+  /** TCP: номер последовательности (32 бита). */
+  seq?: number;
+  /** TCP: номер подтверждения (значим при флаге ACK). */
+  ack?: number;
+  /** TCP: размер окна. */
+  window?: number;
+  /** TCP: опция MSS (только в SYN и SYN-ACK). */
+  mss?: number;
+  /**
+   * TCP: какой кусок байтов прикладного сообщения (http) несёт сегмент: [начало, конец).
+   * Нет — сообщение целиком в одном сегменте.
+   */
+  chunk?: [number, number];
+}
+
 /** Пакет, разложенный по уровням OSI. Объекты пакетов не мутируются — только копируются. */
 export interface Packet {
   /** Уникален для каждой передачи по проводу. */
@@ -61,8 +83,15 @@ export interface Packet {
   l2Hops: number;
   l2: { src: MAC; dst: MAC; vlanTag?: number; etherType: 'ARP' | 'IPv4' };
   arp?: ArpPayload;
-  l3?: { src: IPv4; dst: IPv4; ttl: number; proto: 'ICMP' | 'UDP' | 'TCP' };
-  l4?: { srcPort: number; dstPort: number; flags?: TcpFlag[] };
+  l3?: {
+    src: IPv4;
+    dst: IPv4;
+    ttl: number;
+    proto: 'ICMP' | 'UDP' | 'TCP';
+    /** Поле Identification: назначается отправителем, при маршрутизации не меняется. */
+    ipId?: number;
+  };
+  l4?: L4;
   icmp?: IcmpPayload;
   dhcp?: DhcpPayload;
   dns?: DnsPayload;

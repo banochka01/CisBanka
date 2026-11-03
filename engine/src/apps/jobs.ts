@@ -8,6 +8,7 @@ import type { Simulator } from '../sim/Simulator';
 import type { Job, Timer } from '../sim/state';
 import { isValidIp } from '../util/ip';
 import { BCAST_IP, broadcastOut, defaultTtl, effectiveDns, l3Interfaces, sendIp } from '../l3/stack';
+import { HTTP_PORT, tcpAbort, tcpConnect } from '../l4/tcp';
 
 const PING_INTERVAL = 1000;
 const PING_TIMEOUT = 1000;
@@ -122,10 +123,7 @@ function proceed(sim: Simulator, job: Job) {
       job.phase = 'syn';
       job.srcPort = 49152 + (job.id % 16000);
       job.lines.push(`Подключение к ${name}:80…`);
-      const err = sendIp(sim, d, {
-        l3: { src: '', dst: job.ip!, ttl: defaultTtl(d), proto: 'TCP' },
-        l4: { srcPort: job.srcPort, dstPort: 80, flags: ['SYN'] },
-      });
+      const err = tcpConnect(sim, d, job, job.ip!, HTTP_PORT);
       if (err) return finish(job, `Не удалось подключиться: ${err}`);
       sim.schedule(HTTP_TIMEOUT, { kind: 'timer', deviceId: d.id, timer: { t: 'http-timeout', job: job.id } });
       break;
@@ -197,6 +195,7 @@ export function handleTimer(sim: Simulator, deviceId: string, timer: Timer, onAr
       if (job.phase === 'dns') finish(job, `DNS-сервер не отвечает — не удалось найти узел ${job.target}`);
       break;
     case 'http-timeout':
+      tcpAbort(sim, deviceId, job.id);
       finish(job, 'Сервер не отвечает (превышено время ожидания)');
       break;
     case 'dhcp-start': {
@@ -281,33 +280,4 @@ export function onDns(sim: Simulator, d: Device, pkt: Packet): Verdict {
   job.ip = r.answer;
   proceed(sim, job);
   return { action: 'deliver', reason: `DNS-ответ: ${r.name} = ${r.answer}. Продолжаю задачу` };
-}
-
-export function onTcp(sim: Simulator, d: Device, pkt: Packet): Verdict {
-  const l4 = pkt.l4!;
-  const flags = l4.flags ?? [];
-  const job = Object.values(sim.state.jobs).find((j) => j.kind === 'http' && j.deviceId === d.id && j.srcPort === l4.dstPort && !j.done);
-  if (!job) return drop(`TCP-порт ${l4.dstPort} закрыт — сегмент отброшен`);
-  if (flags.includes('RST')) {
-    finish(job, 'Соединение отклонено: на сервере не запущен HTTP-сервис (TCP RST)');
-    return { action: 'deliver', reason: 'Сервер ответил RST — соединение отклонено' };
-  }
-  const reply = (fl: typeof flags, extra: Partial<Packet> = {}) =>
-    sendIp(sim, d, {
-      l3: { src: pkt.l3!.dst, dst: pkt.l3!.src, ttl: defaultTtl(d), proto: 'TCP' },
-      l4: { srcPort: job.srcPort!, dstPort: 80, flags: fl },
-      ...extra,
-    });
-  if (job.phase === 'syn' && flags.includes('SYN') && flags.includes('ACK')) {
-    job.phase = 'wait';
-    reply(['ACK']);
-    reply(['PSH', 'ACK'], { http: { kind: 'request', method: 'GET', host: job.target, path: job.path } });
-    return { action: 'reply', reason: 'SYN-ACK получен — шаг 3 рукопожатия: отправляю ACK, затем HTTP GET' };
-  }
-  if (pkt.http?.kind === 'response') {
-    job.lines.push(`HTTP/1.1 ${pkt.http.status} OK`, '', `«${pkt.http.title ?? ''}»`, pkt.http.body ?? '');
-    job.done = true;
-    return { action: 'deliver', reason: `HTTP-ответ ${pkt.http.status}: страница получена, браузер её показывает` };
-  }
-  return { action: 'deliver', reason: 'TCP-сегмент принят' };
 }

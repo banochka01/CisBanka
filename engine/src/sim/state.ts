@@ -45,6 +45,29 @@ export interface DeviceRuntime {
   /** DHCP-клиент, ключ — id интерфейса */
   dhcp: Record<string, DhcpClientState>;
   leases: DhcpLease[];
+  /** Следующее значение IP Identification для исходящих пакетов. */
+  ipId: number;
+  /** TCP-соединения, ключ — `${локальный IP}:${порт}>${удалённый IP}:${порт}`. */
+  tcp: Record<string, TcpConn>;
+}
+
+export type TcpState = 'SYN_SENT' | 'SYN_RCVD' | 'ESTABLISHED' | 'FIN_WAIT_1' | 'FIN_WAIT_2' | 'LAST_ACK';
+
+/** Состояние TCP-соединения (TCB) — номера считаются по RFC 9293, ISN из PRNG симуляции. */
+export interface TcpConn {
+  state: TcpState;
+  localIp: IPv4;
+  localPort: number;
+  remoteIp: IPv4;
+  remotePort: number;
+  /** Initial send sequence number. */
+  iss: number;
+  /** Следующий номер, который отправим. */
+  sndNxt: number;
+  /** Следующий номер, который ждём от собеседника. */
+  rcvNxt: number;
+  /** Задача «открыть сайт» (у клиента). */
+  jobId?: number;
 }
 
 export type JobKind = 'ping' | 'traceroute' | 'http' | 'nslookup' | 'dhcp';
@@ -135,5 +158,5 @@ export interface SimState {
 }
 
 export function emptyRuntime(): DeviceRuntime {
-  return { macTable: [], arp: {}, pendingArp: {}, dhcp: {}, leases: [] };
+  return { macTable: [], arp: {}, pendingArp: {}, dhcp: {}, leases: [], ipId: 1, tcp: {} };
 }

@@ -11,3 +11,4 @@ export { l3Interfaces } from './l3/stack';
 export { macTable, arpTable, routes, type MacRow, type ArpRow } from './sim/tables';
 export type { RouteRow } from './l3/stack';
 export * from './util/ip';
+export * from './wire';

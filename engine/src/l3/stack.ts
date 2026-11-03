@@ -4,7 +4,8 @@ import type { Verdict } from '../model/events';
 import type { Simulator } from '../sim/Simulator';
 import { BCAST_MAC } from '../l2/switching';
 import { broadcastOf, inSubnet, maskToPrefix, networkOf } from '../util/ip';
-import { dhcpClientRx, dhcpServerRx, dnsServerRx, httpServerRx } from './services';
+import { dhcpClientRx, dhcpServerRx, dnsServerRx } from './services';
+import { tcpRx } from '../l4/tcp';
 import * as apps from '../apps/jobs';
 
 export const BCAST_IP = '255.255.255.255';
@@ -137,6 +138,12 @@ export function routeLookup(sim: Simulator, d: Device, dst: IPv4): Route | { err
 }
 
 function frameOut(sim: Simulator, d: Device, iface: L3If, dstMac: MAC, body: Omit<Packet, 'id' | 'frameId' | 'l2Hops' | 'l2'>, etherType: 'ARP' | 'IPv4') {
+  // IP Identification назначает отправитель; пересылаемые пакеты сохраняют своё значение.
+  if (body.l3 && body.l3.ipId === undefined) {
+    const rt = sim.rt(d.id);
+    body = { ...body, l3: { ...body.l3, ipId: rt.ipId } };
+    rt.ipId = (rt.ipId + 1) & 0xffff;
+  }
   return sim.transmit(d.id, iface.portId, {
     id: 0,
     frameId: sim.nextId(),
@@ -219,7 +226,7 @@ function icmpError(sim: Simulator, d: Device, iface: L3If, pkt: Packet, type: Ic
   if (pkt.icmp && pkt.icmp.type !== 'echo-request' && pkt.icmp.type !== 'echo-reply') return;
   sendIp(sim, d, {
     l3: { src: iface.ip ?? '', dst: pkt.l3!.src, ttl: defaultTtl(d), proto: 'ICMP' },
-    icmp: { type, code, id: pkt.icmp?.id ?? 0, seq: pkt.icmp?.seq ?? 0, original: { src: pkt.l3!.src, dst: pkt.l3!.dst } },
+    icmp: { type, code, id: pkt.icmp?.id ?? 0, seq: pkt.icmp?.seq ?? 0, original: { src: pkt.l3!.src, dst: pkt.l3!.dst }, originalPacket: stripL2(pkt) },
   });
 }
 
@@ -318,6 +325,5 @@ function localDeliver(sim: Simulator, d: Device, iface: L3If, pkt: Packet): Verd
     if (pkt.dns?.qr === 'response') return apps.onDns(sim, d, pkt);
     return drop(`UDP-порт ${l4.dstPort} закрыт — пакет отброшен`);
   }
-  if (l4.dstPort === 80) return httpServerRx(sim, d, pkt);
-  return apps.onTcp(sim, d, pkt);
+  return tcpRx(sim, d, pkt);
 }

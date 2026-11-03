@@ -1,5 +1,5 @@
 import type { Device, DhcpPool, IPv4, MAC } from '../model/topology';
-import type { DhcpPayload, Packet, TcpFlag } from '../model/packet';
+import type { DhcpPayload, Packet } from '../model/packet';
 import type { Verdict } from '../model/events';
 import type { Simulator } from '../sim/Simulator';
 import { inSubnet, intToIp, ipToInt } from '../util/ip';
@@ -140,30 +140,4 @@ export function dnsServerRx(sim: Simulator, d: Device, pkt: Packet): Verdict {
     action: 'reply',
     reason: rec ? `DNS: нашёл запись ${q.name} → ${rec.address}, отвечаю` : `DNS: записи для ${q.name} нет — отвечаю NXDOMAIN`,
   };
-}
-
-// ---------- HTTP поверх упрощённого TCP ----------
-
-export function httpServerRx(sim: Simulator, d: Device, pkt: Packet): Verdict {
-  const http = d.config.services?.http;
-  const flags = pkt.l4!.flags ?? [];
-  const reply = (fl: TcpFlag[], extra: Partial<Packet> = {}) =>
-    sendIp(sim, d, {
-      l3: { src: pkt.l3!.dst, dst: pkt.l3!.src, ttl: defaultTtl(d), proto: 'TCP' },
-      l4: { srcPort: 80, dstPort: pkt.l4!.srcPort, flags: fl },
-      ...extra,
-    });
-  if (!http?.enabled) {
-    if (!flags.includes('RST')) reply(['RST', 'ACK']);
-    return { action: 'reply', reason: 'Порт 80 закрыт — HTTP-сервис не запущен. Отвечаю TCP RST (соединение отклонено)' };
-  }
-  if (flags.includes('SYN')) {
-    reply(['SYN', 'ACK']);
-    return { action: 'reply', reason: 'TCP SYN на порт 80 — шаг 2 рукопожатия: отвечаю SYN-ACK' };
-  }
-  if (pkt.http?.kind === 'request') {
-    reply(['PSH', 'ACK', 'FIN'], { http: { kind: 'response', status: 200, title: http.title, body: http.body } });
-    return { action: 'reply', reason: `HTTP GET ${pkt.http.path ?? '/'} — отдаю страницу «${http.title}» (200 OK) и закрываю соединение` };
-  }
-  return { action: 'deliver', reason: 'TCP ACK — рукопожатие завершено, соединение установлено' };
 }

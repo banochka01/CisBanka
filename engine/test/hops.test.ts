@@ -133,4 +133,22 @@ describe('режим симуляции: шаг = хоп', () => {
     const d = sim.log.find((e) => e.kind === 'drop' && e.deviceId === pc1.id);
     expect(d?.portId).toBe(pc1.ports[0].id);
   });
+
+  it('HTTP в режиме симуляции: каждый из 9 TCP-сегментов проходит свитч за два хопа', () => {
+    const { b, pc1, pc2 } = twoPcsViaSwitch();
+    pc2.kind = 'server';
+    pc2.config.services = { http: { enabled: true, title: 'T', body: 'B' } };
+    const sim = new Simulator(b.project);
+    sim.beginHops();
+    sim.openUrl(pc1.id, '192.168.1.20');
+    const tcp: string[] = [];
+    let es: LogEntry[] | null;
+    while ((es = sim.stepHop())) {
+      for (const e of arrivals(es)) if (e.packet?.l3?.proto === 'TCP') tcp.push(`${name(sim, e.fromDeviceId)}→${name(sim, e.deviceId)} ${e.packet.l4!.flags!.join('+')}`);
+    }
+    expect(tcp).toHaveLength(18);
+    expect(tcp.slice(0, 4)).toEqual(['ПК1→Свитч SYN', 'Свитч→ПК2 SYN', 'ПК2→Свитч SYN+ACK', 'Свитч→ПК1 SYN+ACK']);
+    expect(tcp.at(-1)).toBe('Свитч→ПК1 ACK');
+    expect(sim.job(Object.values(sim.state.jobs).find((j) => j.kind === 'http')!.id)!.done).toBe(true);
+  });
 });
