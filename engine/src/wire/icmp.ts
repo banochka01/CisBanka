@@ -24,7 +24,7 @@ export interface IcmpHeader {
 export function encodeIcmp(m: IcmpPayload, quoted?: Uint8Array): Uint8Array {
   const echo = m.type === 'echo-request' || m.type === 'echo-reply';
   const w = new Writer().u8(ICMP_TYPE[m.type]).u8(m.type === 'dest-unreachable' ? UNREACH_CODE[m.code ?? 'net'] : 0).u16(0);
-  if (echo) w.u16(m.id & 0xffff).u16(m.seq & 0xffff).bytes(ICMP_ECHO_DATA);
+  if (echo) w.u16(m.id & 0xffff).u16(m.seq & 0xffff).bytes(m.data ?? ICMP_ECHO_DATA);
   else w.u32(0).bytes(quoted ?? new Uint8Array(28));
   const out = w.finish();
   put16(out, 2, internetChecksum(out));

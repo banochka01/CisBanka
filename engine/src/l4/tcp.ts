@@ -21,6 +21,7 @@ const keyOf = (c: TcpConn) => connKey(c.localIp, c.localPort, c.remoteIp, c.remo
 
 /** Сколько байт данных несёт сегмент. */
 export function payloadLength(p: Pick<Packet, 'l4' | 'http'>): number {
+  if (p.l4?.payload) return p.l4.payload.length;
   if (p.l4?.chunk) return p.l4.chunk[1] - p.l4.chunk[0];
   return p.http ? encodeHttp(p.http).length : 0;
 }

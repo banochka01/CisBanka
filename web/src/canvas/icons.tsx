@@ -4,6 +4,16 @@ import type { DeviceKind } from '@ciscobanka/engine';
 export function DeviceIcon({ kind, size = 56 }: { kind: DeviceKind; size?: number }) {
   const common = { width: size, height: size, viewBox: '0 0 64 64', 'aria-hidden': true } as const;
   switch (kind) {
+    case 'linux':
+      return (
+        <svg {...common}>
+          <rect x="8" y="12" width="48" height="34" rx="3" fill="var(--dev-pc, #3b6ea5)" />
+          <rect x="12" y="16" width="40" height="26" fill="#111" />
+          <path d="M16 22l5 4-5 4M24 32h10" stroke="#7CFC00" strokeWidth="2.5" fill="none" />
+          <rect x="24" y="48" width="16" height="4" fill="var(--dev-pc, #3b6ea5)" />
+          <rect x="18" y="52" width="28" height="3" rx="1" fill="var(--dev-pc, #3b6ea5)" />
+        </svg>
+      );
     case 'router':
       return (
         <svg {...common}>

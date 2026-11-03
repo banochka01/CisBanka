@@ -245,6 +245,7 @@ export function l3Rx(sim: Simulator, d: Device, port: Port, pkt: Packet): Verdic
   if (pkt.l2.dst !== iface.mac && pkt.l2.dst !== BCAST_MAC) {
     return drop(`MAC назначения ${pkt.l2.dst} не мой (${iface.mac}) — кадр не для меня, отбрасываю`);
   }
+  if (pkt.l2.etherType === 'raw') return drop('Незнакомый протокол (кадр не разбирается движком) — игнорирую');
   if (pkt.arp) return arpRx(sim, d, iface, pkt);
   if (pkt.l3) return ipRx(sim, d, iface, ifs, pkt);
   return drop('Неизвестный тип кадра');
@@ -310,7 +311,7 @@ function localDeliver(sim: Simulator, d: Device, iface: L3If, pkt: Packet): Verd
     if (pkt.icmp.type === 'echo-request') {
       const err = sendIp(sim, d, {
         l3: { src: ip.dst === BCAST_IP ? iface.ip ?? '' : ip.dst, dst: ip.src, ttl: defaultTtl(d), proto: 'ICMP' },
-        icmp: { type: 'echo-reply', id: pkt.icmp.id, seq: pkt.icmp.seq },
+        icmp: { type: 'echo-reply', id: pkt.icmp.id, seq: pkt.icmp.seq, ...(pkt.icmp.data ? { data: pkt.icmp.data } : {}) },
       });
       return err ? drop(`Эхо-запрос получен, но ответить не могу: ${err}`) : { action: 'reply', reason: `Эхо-запрос (ping) адресован мне — отправляю эхо-ответ на ${ip.src}` };
     }

@@ -9,6 +9,7 @@ import { SwitchPorts, SwitchVlans } from './tabs/Switch';
 import { ServerServices } from './tabs/Server';
 import { Tables } from './tabs/Tables';
 import { DeviceIcon } from '../canvas/icons';
+import { LinuxTab } from '../v86/LinuxTab';
 
 type Tab = { key: string; title: string; render: (d: Device, upd: Upd) => ReactNode };
 
@@ -30,6 +31,12 @@ function tabsFor(kind: Device['kind']): Tab[] {
         { key: 'services', title: 'Сервисы', render: (d, u) => <ServerServices d={d} upd={u} /> },
         { key: 'tools', title: 'Инструменты', render: (d) => <Tools d={d} /> },
         tables,
+        general,
+      ];
+    case 'linux':
+      return [
+        { key: 'term', title: 'Терминал', render: (d) => <LinuxTab d={d} /> },
+        { key: 'ip', title: 'Настройка IP', render: (d, u) => <HostConfig d={d} upd={u} /> },
         general,
       ];
     case 'router':

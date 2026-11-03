@@ -1,6 +1,7 @@
 import type { IPv4, MAC } from './topology';
 
-export type Protocol = 'ARP' | 'ICMP' | 'DHCP' | 'DNS' | 'HTTP' | 'TCP' | 'UDP';
+/** OTHER — кадр, который движок не моделирует (IPv6, mDNS… от Linux-хоста): свитч пересылает его по MAC. */
+export type Protocol = 'ARP' | 'ICMP' | 'DHCP' | 'DNS' | 'HTTP' | 'TCP' | 'UDP' | 'OTHER';
 export type TcpFlag = 'SYN' | 'ACK' | 'FIN' | 'RST' | 'PSH';
 
 export interface ArpPayload {
@@ -20,6 +21,8 @@ export interface IcmpPayload {
   original?: { src: IPv4; dst: IPv4 };
   /** Для ошибок — исходный IP-пакет (в ICMP вкладываются его заголовок и первые 8 байт данных). */
   originalPacket?: IpBody;
+  /** Данные эха как есть (от настоящего хоста); эхо-ответ возвращает их без изменений. */
+  data?: Uint8Array;
 }
 
 export interface DhcpPayload {
@@ -71,6 +74,8 @@ export interface L4 {
    * Нет — сообщение целиком в одном сегменте.
    */
   chunk?: [number, number];
+  /** TCP: байты данных как есть (сегмент от настоящего хоста); длина считается по ним. */
+  payload?: Uint8Array;
 }
 
 /** Пакет, разложенный по уровням OSI. Объекты пакетов не мутируются — только копируются. */
@@ -81,7 +86,18 @@ export interface Packet {
   frameId: number;
   /** Сколько свитчей кадр уже прошёл — защита от петель. */
   l2Hops: number;
-  l2: { src: MAC; dst: MAC; vlanTag?: number; etherType: 'ARP' | 'IPv4' };
+  l2: {
+    src: MAC;
+    dst: MAC;
+    vlanTag?: number;
+    /** raw — непрозрачный кадр (движок не разбирает), только L2. */
+    etherType: 'ARP' | 'IPv4' | 'raw';
+    /**
+     * Точные байты кадра без тега 802.1Q — у кадров от настоящего хоста (Linux в VM).
+     * Живут, пока кадр не пересобран: свитч копирует l2 целиком, роутер строит новый l2 — и байты уходят.
+     */
+    raw?: Uint8Array;
+  };
   arp?: ArpPayload;
   l3?: {
     src: IPv4;
@@ -104,6 +120,7 @@ export type IpBody = Omit<Packet, 'id' | 'frameId' | 'l2Hops' | 'l2' | 'arp'> & 
 };
 
 export function protocolOf(p: Pick<Packet, 'arp' | 'icmp' | 'dhcp' | 'dns' | 'http' | 'l3'>): Protocol {
+  if ((p as Pick<Packet, 'l2'>).l2?.etherType === 'raw') return 'OTHER';
   if (p.arp) return 'ARP';
   if (p.icmp) return 'ICMP';
   if (p.dhcp) return 'DHCP';

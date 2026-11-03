@@ -3,6 +3,11 @@ import type { Packet } from '../model/packet';
 
 /** Что это за пакет, одной фразой: «ARP-запрос: у кого 192.168.1.1?». */
 export function describePacket(p: Packet): string {
+  if (p.l2.etherType === 'raw') {
+    const b = p.l2.raw;
+    const et = b && b.length >= 14 ? `0x${((b[12] << 8) | b[13]).toString(16).padStart(4, '0')}` : '?';
+    return `Незнакомый движку кадр (EtherType ${et}, ${b?.length ?? 0} байт) — свитч пересылает его по MAC`;
+  }
   if (p.arp) {
     return p.arp.op === 'request'
       ? `ARP-запрос: «У кого ${p.arp.targetIp}? Сообщите ${p.arp.senderIp}»`

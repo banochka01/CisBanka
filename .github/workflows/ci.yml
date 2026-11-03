@@ -32,11 +32,11 @@ jobs:
         env:
           REQUIRE_TSHARK: '1'
         run: npx vitest run test/tshark.test.ts --reporter=default --reporter=github-actions
-      # Анализатор грузится лениво — основной чанк должен оставаться меньше 500 КБ (без предупреждения Vite).
+      # Анализатор и v86 грузятся лениво — основной чанк должен оставаться меньше 500 КБ.
       - name: Сборка
         run: |
           npm run build 2>&1 | tee build.log; test "${PIPESTATUS[0]}" = 0
-          if grep -q "larger than 500" build.log; then echo "::error title=Бандл::основной чанк больше 500 КБ"; exit 1; fi
+          size=$(stat -c %s web/dist/assets/index-*.js); echo "основной чанк: $size байт"; if [ "$size" -gt 512000 ]; then echo "::error title=Бандл::основной чанк больше 500 КБ ($size)"; exit 1; fi
 
   # Чистая машина: docker compose up -d --build с нуля, ждём healthcheck, проверяем HTTPS через Caddy и бэкап.
   docker:

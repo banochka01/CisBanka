@@ -10,3 +10,4 @@ export * from './dns';
 export * from './http';
 export * from './encode';
 export * from './decode';
+export * from './model';

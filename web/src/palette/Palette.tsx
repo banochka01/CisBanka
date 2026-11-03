@@ -4,7 +4,7 @@ import { useStore } from '../store/project';
 import { useSim } from '../store/sim';
 import { CABLE_LABELS } from '../ui/portInfo';
 
-const KINDS: DeviceKind[] = ['router', 'switch', 'hub', 'pc', 'laptop', 'server'];
+const KINDS: DeviceKind[] = ['router', 'switch', 'hub', 'pc', 'laptop', 'server', 'linux'];
 const CABLES: CableType[] = ['straight', 'crossover', 'fiber'];
 
 export function Palette() {

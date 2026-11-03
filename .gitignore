@@ -6,3 +6,4 @@ data/
 backups/
 .deploy-tag
 .deploy.lock
+web/public/v86/

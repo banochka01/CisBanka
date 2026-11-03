@@ -1,7 +1,7 @@
 import type { CableType, Device, Port } from '../model/topology';
 
 /** Устройства с MDI-разъёмом (передача на 1-2). У свитчей и хабов — MDI-X. */
-const MDI = new Set(['pc', 'laptop', 'server', 'router']);
+const MDI = new Set(['pc', 'laptop', 'server', 'router', 'linux']);
 
 export interface CableCheck {
   ok: boolean;

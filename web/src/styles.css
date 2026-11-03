@@ -496,3 +496,11 @@ table.grid tr.sel td { background: color-mix(in srgb, var(--accent) 10%, transpa
 :root[data-theme='dark'] .fl-server { color: #8ab4ff; }
 :root[data-theme='dark'] .follow-body .fl-client { background: #3a1d22; }
 :root[data-theme='dark'] .follow-body .fl-server { background: #1d2440; }
+
+/* Linux-хост (эксперимент) */
+.linux-console { display: flex; flex-direction: column; gap: 6px; min-width: 660px; }
+.linux-bar { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.linux-state { font-weight: 600; }
+.linux-state.ready { color: #2e9e4f; }
+.linux-state.error { color: #d9534f; }
+.linux-term { background: #0b0f14; padding: 4px; border-radius: 4px; }

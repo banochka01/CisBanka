@@ -39,6 +39,12 @@ const DEFAULTS: Required<SimOptions> = {
 
 export type Led = 'none' | 'green' | 'orange' | 'red';
 
+/**
+ * Внешний хост (Linux в VM): куда отдавать кадры, пришедшие на его порт.
+ * Возвращает false, если VM не может принять кадр (не запущена, режим симуляции).
+ */
+export type ExternalRx = (deviceId: string, portId: string, packet: Packet) => boolean;
+
 type NewEvent = QEvent extends infer E ? (E extends QEvent ? Omit<E, 'seq' | 'time'> : never) : never;
 
 /**
@@ -80,6 +86,8 @@ export class Simulator {
   /** Запись журнала, внутри обработки которой мы сейчас: исходящие кадры приписываются к ней. */
   private current: LogEntry | null = null;
   private inCommand = false;
+  /** Приём кадров «Linux-хостами» (VM). Не часть состояния: внешний мир шаг назад не откатывает. */
+  externalRx: ExternalRx | null = null;
 
   constructor(project: Project, opts: SimOptions = {}) {
     this.opts = { ...DEFAULTS, ...opts };
@@ -130,7 +138,7 @@ export class Simulator {
   /** При старте хосты с DHCP сами запрашивают адрес. */
   private boot() {
     for (const d of this.project.devices) {
-      if (d.ports.some((p) => p.l3?.dhcp)) apps.startDhcp(this, d.id);
+      if (d.kind !== 'linux' && d.ports.some((p) => p.l3?.dhcp)) apps.startDhcp(this, d.id);
     }
   }
 
@@ -550,9 +558,25 @@ export class Simulator {
       };
     } else if (d.kind === 'switch') v = switchRx(this, d, port, ev.packet);
     else if (d.kind === 'hub') v = hubRx(this, d, port, ev.packet);
+    else if (d.kind === 'linux') {
+      v = this.externalRx?.(d.id, port.id, ev.packet)
+        ? { action: 'deliver', reason: 'Кадр передан в сетевую карту Linux (VM) — дальше его обрабатывает настоящий Linux' }
+        : { action: 'drop', reason: 'Linux-хост не запущен (или режим симуляции) — кадр отброшен' };
+    }
     else v = l3Rx(this, d, port, ev.packet);
     entry.action = v.action;
     entry.reason = v.reason;
+  }
+
+  /**
+   * Кадр от внешнего хоста (Linux в VM) уходит в провод из его порта в текущий момент модели.
+   * Не записывается в историю команд: VM живёт в реальном времени, реплей её кадров не нужен.
+   */
+  injectFrame(deviceId: string, portId: string, packet: Packet): boolean {
+    this.current = null;
+    const sent = this.transmit(deviceId, portId, { ...packet, frameId: this.nextId() });
+    this.current = null;
+    return sent;
   }
 
   // ---------- инструменты (вкладка «Инструменты» на ПК) ----------

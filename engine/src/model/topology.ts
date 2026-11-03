@@ -1,7 +1,8 @@
 // Топология и конфигурация — то, что сохраняется в проект.
 // Состояние «во время работы» (таблицы, очереди) живёт отдельно в sim/state.ts.
 
-export type DeviceKind = 'router' | 'switch' | 'pc' | 'laptop' | 'server' | 'hub';
+/** linux — «Linux-хост (эксперимент)»: настоящий Linux в эмуляторе v86, кадры приходят извне (см. Simulator.injectFrame). */
+export type DeviceKind = 'router' | 'switch' | 'pc' | 'laptop' | 'server' | 'hub' | 'linux';
 /** MAC в формате Cisco: 0060.5C3A.1B01 */
 export type MAC = string;
 export type IPv4 = string;

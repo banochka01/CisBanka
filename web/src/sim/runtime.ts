@@ -15,6 +15,18 @@ export function getSim(): Simulator {
 }
 
 export const getMode = () => mode;
+
+/**
+ * Часы модели. Обычно реальное время считается мгновенно (runUntilIdle). Когда в сети работает
+ * Linux-хост (VM v86), время модели должно идти вместе с настоящим: иначе тайм-ауты ping и TCP
+ * сработают раньше, чем VM успеет ответить. Тогда clock() даёт «сейчас» модели, а модуль VM
+ * сам двигает симуляцию таймером.
+ */
+let clock: (() => number) | null = null;
+export function setClock(c: (() => number) | null) {
+  clock = c;
+}
+export const getClock = () => clock;
 export const getJournalFrom = () => journalFrom;
 
 /**
@@ -37,12 +49,16 @@ export function setMode(m: SimMode) {
     journalFrom = s.log.length;
     s.beginHops();
     s.primeHop();
-  } else s.runUntilIdle();
+  } else if (clock) s.runUntil(clock());
+  else s.runUntilIdle();
 }
 
 /** После команды (ping, DHCP…): в реальном времени — досчитать до конца, в симуляции — ждать шагов. */
 export function settle() {
-  if (mode === 'realtime') getSim().runUntilIdle();
+  if (mode === 'realtime') {
+    if (clock) getSim().runUntil(clock());
+    else getSim().runUntilIdle();
+  }
   else getSim().primeHop();
 }
 

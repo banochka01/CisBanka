@@ -8,6 +8,7 @@ export const DEVICE_LABELS: Record<DeviceKind, string> = {
   laptop: 'Ноутбук',
   server: 'Сервер',
   hub: 'Хаб',
+  linux: 'Linux-хост (эксперимент)',
 };
 
 function portList(kind: DeviceKind): { name: string; media: Media }[] {
@@ -23,6 +24,8 @@ function portList(kind: DeviceKind): { name: string; media: Media }[] {
       ];
     case 'hub':
       return Array.from({ length: 8 }, (_, i) => cu(`Port${i}`));
+    case 'linux':
+      return [cu('eth0')];
     default:
       return [cu('Fa0')];
   }

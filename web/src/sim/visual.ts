@@ -1,7 +1,7 @@
 // Общее для отрисовки симуляции: цвета протоколов, подписи решений, геометрия проводов.
 import type { LogEntry, Protocol, Simulator } from '@ciscobanka/engine';
 
-export const PROTOCOLS: Protocol[] = ['ARP', 'ICMP', 'DHCP', 'DNS', 'HTTP', 'TCP', 'UDP'];
+export const PROTOCOLS: Protocol[] = ['ARP', 'ICMP', 'DHCP', 'DNS', 'HTTP', 'TCP', 'UDP', 'OTHER'];
 
 export const PROTO_COLORS: Record<Protocol, string> = {
   ARP: '#e0a91b',
@@ -11,6 +11,7 @@ export const PROTO_COLORS: Record<Protocol, string> = {
   HTTP: '#8a4fd8',
   TCP: '#6b7a8c',
   UDP: '#139c9c',
+  OTHER: '#8c8c8c',
 };
 
 export const PROTO_HINTS: Record<Protocol, string> = {
@@ -21,6 +22,7 @@ export const PROTO_HINTS: Record<Protocol, string> = {
   HTTP: 'веб-страницы',
   TCP: 'установка соединения',
   UDP: 'прочие датаграммы',
+  OTHER: 'кадры, которые движок не разбирает (IPv6, mDNS… от Linux-хоста)',
 };
 
 /** Центр иконки устройства относительно левого верхнего угла узла. */

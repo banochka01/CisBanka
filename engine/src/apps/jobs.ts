@@ -229,7 +229,8 @@ export function onIcmp(sim: Simulator, d: Device, pkt: Packet): Verdict {
   const src = pkt.l3!.src;
   const job = sim.job(icmp.id);
   if (!job || job.deviceId !== d.id || job.done) return drop(`ICMP ${icmp.type} от ${src} — никто его не ждал (задача уже завершена)`);
-  const rtt = sim.now - (job.sentAt?.[icmp.seq] ?? sim.now);
+  // Время модели идёт по часам, когда в сети есть Linux-хост, — округляем до мс.
+  const rtt = Math.round(sim.now - (job.sentAt?.[icmp.seq] ?? sim.now));
 
   if (job.kind === 'ping') {
     if (job.results![icmp.seq] !== undefined) return drop('Ответ пришёл слишком поздно — запрос уже засчитан как потерянный');
