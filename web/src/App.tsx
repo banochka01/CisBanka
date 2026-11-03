@@ -9,6 +9,7 @@ import { WindowLayer } from './windows/WindowLayer';
 import { EXAMPLES } from './examples';
 import { useSim } from './store/sim';
 import { SimPanel } from './sim/SimPanel';
+import { CaptureDock } from './capture/CaptureDock';
 import { startAutosave, useAccount } from './store/account';
 import { AccountBar, AccountDialogs, ReadOnlyBanner } from './account/AccountUI';
 
@@ -174,6 +175,7 @@ export function App() {
           <Canvas />
           <SimPanel />
         </div>
+        <CaptureDock />
         <StatusBar />
       </div>
       <WindowLayer />

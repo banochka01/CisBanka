@@ -3,6 +3,7 @@ import { EdgeLabelRenderer, type Edge, type EdgeProps } from '@xyflow/react';
 import type { CableType, Led } from '@ciscobanka/engine';
 import { CABLE_LABELS } from '../ui/portInfo';
 import { exitDist } from '../sim/visual';
+import { useCapture, useLinkCaptured } from '../store/capture';
 
 export type LinkEdgeType = Edge<
   {
@@ -29,6 +30,7 @@ const LED_COLORS: Record<Led, string> = { none: 'transparent', green: 'var(--led
 export const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, targetY, data, selected }: EdgeProps<LinkEdgeType>) {
   const [hover, setHover] = useState(false);
   const [pinned, setPinned] = useState(false);
+  const captured = useLinkCaptured(id);
   if (!data) return null;
   const dx = targetX - sourceX;
   const dy = targetY - sourceY;
@@ -94,6 +96,19 @@ export const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, 
             data-edge={id}
           >
             !
+          </button>
+        )}
+        {captured && (
+          <button
+            className="link-sniffer nodrag nopan"
+            style={{ transform: `translate(-50%,-50%) translate(${mid.x + uy * 18}px,${mid.y - ux * 18}px)` }}
+            onClick={() => {
+              const t = useCapture.getState().tabs.find((x) => x.point.kind === 'link' && x.point.linkId === id);
+              if (t) useCapture.getState().setActive(t.id);
+            }}
+            title="На этом проводе идёт захват трафика — открыть вкладку"
+          >
+            🔍
           </button>
         )}
         {(hover || pinned) && (

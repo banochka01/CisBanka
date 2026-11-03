@@ -17,6 +17,7 @@ import { LinkEdge, type LinkEdgeType } from './LinkEdge';
 import { SimOverlay } from './SimOverlay';
 import { useSim } from '../store/sim';
 import { CENTER } from '../sim/visual';
+import { CaptureMenu, type MenuTarget } from './CaptureMenu';
 
 const nodeTypes = { device: DeviceNode };
 const edgeTypes = { link: LinkEdge };
@@ -37,6 +38,8 @@ export function Canvas() {
   const [mouse, setMouse] = useState<{ x: number; y: number } | null>(null);
   // мини-карта по умолчанию свёрнута — не закрывает устройства в углу холста
   const [showMap, setShowMap] = useState(false);
+  const [menu, setMenu] = useState<MenuTarget | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
   const rf = useReactFlow();
   const loadSeq = useStore((s) => s.loadSeq);
   useEffect(() => {
@@ -157,6 +160,14 @@ export function Canvas() {
           if (useSim.getState().pdu) useSim.getState().pduClick(n.id);
           else if (useStore.getState().cable) useStore.getState().openPicker(n.id, e.clientX, e.clientY);
         }}
+        onEdgeContextMenu={(e, edge) => {
+          e.preventDefault();
+          setMenu({ kind: 'link', linkId: edge.id, x: e.clientX, y: e.clientY });
+        }}
+        onNodeContextMenu={(e, n) => {
+          e.preventDefault();
+          setMenu({ kind: 'device', deviceId: n.id, x: e.clientX, y: e.clientY });
+        }}
         onNodeDoubleClick={(_, n) => {
           if (!useStore.getState().cable && !useSim.getState().pdu) useStore.getState().openWindow(n.id);
         }}
@@ -212,6 +223,7 @@ export function Canvas() {
       <button className="btn minimap-toggle" onClick={() => setShowMap((v) => !v)} title="Мини-карта всего проекта" aria-pressed={showMap}>
         {showMap ? '▾ Скрыть карту' : '▸ Карта'}
       </button>
+      {menu && <CaptureMenu target={menu} onClose={closeMenu} />}
       {pdu && (
         <div className="canvas-hint">
           ✉ Простой пакет (ping): {pdu.srcId ? 'кликните получателя' : 'кликните отправителя'}. Esc — отмена.

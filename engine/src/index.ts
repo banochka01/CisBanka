@@ -12,3 +12,4 @@ export { macTable, arpTable, routes, type MacRow, type ArpRow } from './sim/tabl
 export type { RouteRow } from './l3/stack';
 export * from './util/ip';
 export * from './wire';
+export * from './capture';

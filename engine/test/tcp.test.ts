@@ -3,7 +3,7 @@ import { Simulator } from '../src/sim/Simulator';
 import { TopologyBuilder } from '../src/model/devices';
 import type { LogEntry } from '../src/model/events';
 import type { Packet } from '../src/model/packet';
-import { arpToPayload, bytesToHex, decodeFrame, dhcpToPayload, dnsToPayload, encodeFrame, ipToString, bitsToFlags } from '../src/wire';
+import { arpToPayload, bytesToHex, decodeFrame, dhcpToPayload, dnsToPayload, encodeFrame, fromUtf8, ipToString, bitsToFlags } from '../src/wire';
 import { TCP_MSS } from '../src/l4/tcp';
 import { M24, run } from './helpers';
 
@@ -70,9 +70,31 @@ describe('TCP: seq/ack, MSS, закрытие FIN/ACK', () => {
     expect(cAck).toMatchObject({ seq: x + 1 + getLen, ack: y + 1 + respLen });
     expect(cFin).toMatchObject({ seq: x + 1 + getLen, ack: y + 2 + respLen });
     expect(last).toMatchObject({ seq: y + 2 + respLen, ack: x + 2 + getLen });
+    // Сервер закрывает первым — оба HTTP-сообщения объявляют Connection: close.
+    for (const p of [s[3], s[4]]) {
+      const d = decodeFrame(encodeFrame(p));
+      expect(d.http!.h.headers).toContainEqual(expect.objectContaining({ name: 'Connection', value: 'close' }));
+      expect(fromUtf8(d.bytes.subarray(d.http!.off, d.http!.end))).toContain('\r\nConnection: close\r\n');
+    }
     // Соединения закрыты с обеих сторон.
     expect(sim.rt(pc.id).tcp).toEqual({});
     expect(sim.rt(srv.id).tcp).toEqual({});
+  });
+
+  it('если MAC сервера неизвестен, перед SYN в журнал и на провод попадает ARP-обмен', () => {
+    const { b, pc, srv } = lan();
+    const sim = new Simulator(b.project);
+    sim.runUntilIdle();
+    expect(sim.rt(pc.id).arp['192.168.1.2']).toBeUndefined();
+    const from = sim.log.length;
+    run(sim, sim.openUrl(pc.id, '192.168.1.2'));
+    const wire = sim.log.slice(from).filter((e) => e.kind === 'frame' && sim.device(e.deviceId!).kind !== 'switch');
+    const first = wire.slice(0, 3).map((e) => (e.packet!.arp ? `ARP ${e.packet!.arp.op}` : `TCP ${fl(e.packet!)}`));
+    expect(first).toEqual(['ARP request', 'ARP reply', 'TCP SYN']);
+    expect(wire[0].packet!.l2.dst).toBe('FFFF.FFFF.FFFF');
+    expect(wire[0].deviceId).toBe(srv.id);
+    // SYN ждал ответа ARP и ушёл уже на MAC сервера.
+    expect(wire[2].packet!.l2.dst).toBe(b.port(srv, 'Fa0').mac);
   });
 
   it('ISN берутся из PRNG: тот же проект — те же номера, другое зерно — другие', () => {
