@@ -1,9 +1,10 @@
 // Захваты трафика (снифферы) в UI. Сам захват — engine Capture, читающий журнал симулятора;
 // здесь — список вкладок, активная вкладка и состояние док-панели.
 import { create } from 'zustand';
-import { Capture, type CapturePoint } from '@ciscobanka/engine';
+import { Capture, type CapturedFrame, type CapturePoint } from '@ciscobanka/engine';
 import { getSim } from '../sim/runtime';
 import { useStore } from './project';
+import { useSim } from './sim';
 
 export interface CaptureTab {
   id: number;
@@ -11,6 +12,18 @@ export interface CaptureTab {
   cap: Capture;
   /** Меняется при каждом изменении списка кадров — для перерисовки. */
   version: number;
+  /** Применённый display-фильтр. */
+  filter: string;
+  /** Выбранный кадр (номер). */
+  selected: number | null;
+  /** Счётчик «прокрути к выбранному» (выбор пришёл со схемы). */
+  scrollSeq: number;
+}
+
+/** Путь выбранного пакета на схеме. */
+export interface PathHighlight {
+  links: Set<string>;
+  devices: Set<string>;
 }
 
 interface CaptureUi {
@@ -20,6 +33,9 @@ interface CaptureUi {
   detached: boolean;
   height: number;
   collapsed: boolean;
+  highlight: PathHighlight | null;
+  /** Открыт диалог «Follow TCP stream». */
+  follow: { tabId: number; stream: number } | null;
 
   start: (point: CapturePoint) => void;
   stop: (id: number) => void;
@@ -32,6 +48,35 @@ interface CaptureUi {
   setCollapsed: (v: boolean) => void;
   /** Подтянуть новые кадры во все работающие захваты. */
   sync: () => void;
+  setFilter: (id: number, text: string) => void;
+  /** Выбрать кадр; fromScheme — выбор пришёл со схемы (не дёргаем схему обратно). */
+  select: (id: number, no: number | null, fromScheme?: boolean) => void;
+  setFollow: (f: { tabId: number; stream: number } | null) => void;
+}
+
+/**
+ * Путь пакета по схеме: все передачи этого кадра (копии при flood) и, для IP, этой же
+ * датаграммы на других участках (тот же src/dst/proto/Identification — роутер пересоздаёт кадр).
+ */
+export function packetPath(f: CapturedFrame): PathHighlight {
+  const sim = getSim();
+  const p = f.packet;
+  const links = new Set<string>();
+  const devices = new Set<string>();
+  const ip = p.l3;
+  for (let i = 0; i < sim.logCursor; i++) {
+    const e = sim.log[i];
+    if (e.kind !== 'frame' || !e.packet || !e.linkId) continue;
+    const q = e.packet;
+    const same =
+      q.frameId === p.frameId ||
+      (!!ip && !!q.l3 && ip.ipId !== undefined && q.l3.ipId === ip.ipId && q.l3.src === ip.src && q.l3.dst === ip.dst && q.l3.proto === ip.proto && q.icmp?.type === p.icmp?.type);
+    if (!same) continue;
+    links.add(e.linkId);
+    if (e.fromDeviceId) devices.add(e.fromDeviceId);
+    if (e.deviceId) devices.add(e.deviceId);
+  }
+  return { links, devices };
 }
 
 let seq = 1;
@@ -60,8 +105,10 @@ export const useCapture = create<CaptureUi>((set, get) => ({
   tabs: [],
   active: null,
   detached: false,
-  height: 300,
+  height: Math.max(260, Math.round((typeof window === 'undefined' ? 800 : window.innerHeight) * 0.45)),
   collapsed: false,
+  highlight: null,
+  follow: null,
 
   start(point) {
     const existing = get().tabs.find((t) => samePoint(t.point, point));
@@ -70,7 +117,7 @@ export const useCapture = create<CaptureUi>((set, get) => ({
       set({ active: existing.id, collapsed: false });
       return;
     }
-    const t: CaptureTab = { id: seq++, point, cap: new Capture(point, getSim()), version: 0 };
+    const t: CaptureTab = { id: seq++, point, cap: new Capture(point, getSim()), version: 0, filter: '', selected: null, scrollSeq: 0 };
     set((s) => ({ tabs: [...s.tabs, t], active: t.id, collapsed: false }));
   },
 
@@ -89,12 +136,36 @@ export const useCapture = create<CaptureUi>((set, get) => ({
   close(id) {
     set((s) => {
       const tabs = s.tabs.filter((t) => t.id !== id);
-      return { tabs, active: s.active === id ? tabs.at(-1)?.id ?? null : s.active };
+      return { tabs, active: s.active === id ? tabs.at(-1)?.id ?? null : s.active, highlight: s.active === id ? null : s.highlight, follow: s.follow?.tabId === id ? null : s.follow };
     });
   },
 
   setActive(id) {
-    set({ active: id, collapsed: false });
+    set({ active: id, collapsed: false, highlight: null });
+    const t = get().tabs.find((x) => x.id === id);
+    if (t?.selected) get().select(id, t.selected);
+  },
+
+  setFilter(id, text) {
+    set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...tab(t), filter: text } : t)) }));
+  },
+
+  select(id, no, fromScheme = false) {
+    const t = get().tabs.find((x) => x.id === id);
+    if (!t) return;
+    const f = no === null ? undefined : t.cap.frames[no - 1];
+    set((s) => ({
+      tabs: s.tabs.map((x) => (x.id === id ? { ...x, selected: f ? no : null, scrollSeq: fromScheme ? x.scrollSeq + 1 : x.scrollSeq } : x)),
+      highlight: f ? packetPath(f) : null,
+    }));
+    // В режиме симуляции — открыть разбор этой записи журнала (и выделить конверт).
+    if (f && !fromScheme && useSim.getState().mode === 'simulation' && useSim.getState().selected?.entryId !== f.entry.id) {
+      useSim.getState().select(f.entry.id, 'in');
+    }
+  },
+
+  setFollow(f) {
+    set({ follow: f });
   },
 
   setDetached(v) {
@@ -115,7 +186,8 @@ export const useCapture = create<CaptureUi>((set, get) => ({
     const tabs = get().tabs.map((t) => {
       if (!t.cap.sync(sim)) return t;
       any = true;
-      return tab(t);
+      const keep = t.selected !== null && t.selected <= t.cap.frames.length;
+      return { ...tab(t), selected: keep ? t.selected : null };
     });
     if (any) set({ tabs });
   },
@@ -126,6 +198,27 @@ useStore.subscribe((s, prev) => {
   if (s.simTick !== prev.simTick && useCapture.getState().tabs.length) useCapture.getState().sync();
 });
 
+/**
+ * Выбор со схемы (конверт, строка журнала) → выбрать этот кадр в активном захвате.
+ * Ищем ту же запись журнала, иначе тот же кадр (frameId) на этом проводе.
+ */
+useSim.subscribe((s, prev) => {
+  const id = s.selected?.entryId;
+  if (!id || id === prev.selected?.entryId) return;
+  const st = useCapture.getState();
+  const order = [...st.tabs].sort((a, b) => (a.id === st.active ? -1 : b.id === st.active ? 1 : 0));
+  const entry = getSim().log[id - 1];
+  for (const t of order) {
+    const f = t.cap.frames.find((x) => x.entry.id === id) ?? (entry?.packet && t.cap.frames.find((x) => x.packet.frameId === entry.packet!.frameId));
+    if (f) {
+      if (t.selected === f.no && st.active === t.id) return;
+      useCapture.setState({ active: t.id });
+      st.select(t.id, f.no, true);
+      return;
+    }
+  }
+});
+
 /** Идёт ли захват на этом линке (для лупы на проводе). */
 export const useLinkCaptured = (linkId: string) =>
   useCapture((s) => s.tabs.some((t) => t.point.kind === 'link' && t.point.linkId === linkId && t.cap.running));
@@ -133,3 +226,6 @@ export const useLinkCaptured = (linkId: string) =>
 /** Идёт ли захват на одном из портов. */
 export const usePortsCaptured = (portIds: string[]) =>
   useCapture((s) => s.tabs.some((t) => t.point.kind === 'port' && t.cap.running && portIds.includes(t.point.portId)));
+
+// Только в разработке: «перерисовать после команд из консоли» (см. __cisbanka в sim/runtime).
+if (import.meta.env.DEV) Object.assign((globalThis as unknown as Record<string, object>).__cisbanka ?? {}, { bump: () => useStore.getState().bumpSim() });

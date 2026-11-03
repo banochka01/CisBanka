@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CapturePoint } from '@ciscobanka/engine';
 import { useStore } from '../store/project';
 import { pointTitle, useCapture } from '../store/capture';
+import { getSim, settle } from '../sim/runtime';
 
 export type MenuTarget = { x: number; y: number } & ({ kind: 'link'; linkId: string } | { kind: 'device'; deviceId: string });
 
@@ -47,6 +48,7 @@ export function CaptureMenu({ target, onClose }: { target: MenuTarget; onClose: 
 
   let items: { point: CapturePoint; label: string }[] = [];
   let title = '';
+  let clear: { label: string; run: () => void } | null = null;
   if (target.kind === 'link') {
     const point: CapturePoint = { kind: 'link', linkId: target.linkId };
     title = pointTitle(point);
@@ -57,12 +59,27 @@ export function CaptureMenu({ target, onClose }: { target: MenuTarget; onClose: 
     title = d.name;
     const linked = new Set(project.links.flatMap((l) => [l.a.portId, l.b.portId]));
     items = d.ports.filter((p) => linked.has(p.id)).map((p) => ({ point: { kind: 'port', portId: p.id }, label: `интерфейс ${p.name}` }));
+    // Очистка таблиц — команда симулятора (переигрывается при шаге назад), как ping из окна.
+    const after = () => {
+      settle();
+      useStore.getState().bumpSim();
+    };
+    if (d.kind === 'switch') clear = { label: '🧹 Очистить MAC-таблицу', run: () => (getSim().clearMacTable(d.id), after()) };
+    else if (d.kind !== 'hub') clear = { label: '🧹 Очистить ARP-кэш', run: () => (getSim().clearArpCache(d.id), after()) };
   }
 
   return (
     <div ref={ref} className="ctx-menu" role="menu" style={{ left: pos.x, top: pos.y }} onClick={onClose}>
       <div className="ctx-title">{title}</div>
       {items.length ? items.map((it, i) => <Item key={i} {...it} />) : <div className="ctx-item muted">Нет подключённых интерфейсов</div>}
+      {clear && (
+        <>
+          <div className="ctx-sep" />
+          <button className="ctx-item" role="menuitem" onClick={clear.run}>
+            {clear.label}
+          </button>
+        </>
+      )}
     </div>
   );
 }

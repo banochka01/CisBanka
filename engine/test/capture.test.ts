@@ -62,6 +62,45 @@ describe('захват на линке за свитчем', () => {
     expect(describeFrames(other.frames)).toEqual(['ARP request', 'ICMP echo-request 2']);
   });
 
+  it('«Очистить MAC-таблицу» → unknown unicast flood; «Очистить ARP-кэш» → повторный ARP', () => {
+    const { b, pc1, pc3, sw, link } = lan3();
+    const sim = new Simulator(b.project);
+    run(sim, sim.ping(pc1.id, '192.168.1.20', 1));
+    const own = new Capture({ kind: 'link', linkId: link(pc1) }, sim);
+    const other = new Capture({ kind: 'link', linkId: link(pc3) }, sim);
+    expect(run(sim, sim.clearMacTable(sw.id))).toContain('MAC-таблица очищена (удалено записей: 2)');
+    run(sim, sim.ping(pc1.id, '192.168.1.20', 1));
+    other.sync(sim);
+    // Свитч не знает ПК2 — эхо-запрос рассылается во все порты; ответ уже unicast (ПК1 изучен по запросу).
+    expect(describeFrames(other.frames)).toEqual(['ICMP echo-request 1']);
+    expect(sim.log.some((e) => e.kind === 'info' && e.reason.includes('unknown unicast flood'))).toBe(true);
+
+    own.clear(sim);
+    expect(run(sim, sim.clearArpCache(pc1.id))).toContain('ARP-кэш очищен (удалено записей: 1)');
+    run(sim, sim.ping(pc1.id, '192.168.1.20', 1));
+    own.sync(sim);
+    expect(describeFrames(own.frames)).toEqual(['ARP request', 'ARP reply', 'ICMP echo-request 1', 'ICMP echo-reply 1']);
+  });
+
+  it('очистка таблиц переигрывается при шаге назад/вперёд', () => {
+    const { b, pc1, pc3, sw, link } = lan3();
+    const sim = new Simulator(b.project);
+    run(sim, sim.ping(pc1.id, '192.168.1.20', 1));
+    sim.beginHops();
+    const other = new Capture({ kind: 'link', linkId: link(pc3) }, sim);
+    sim.clearMacTable(sw.id);
+    sim.ping(pc1.id, '192.168.1.20', 1);
+    sim.primeHop();
+    while (sim.stepHop()) other.sync(sim);
+    const full = describeFrames(other.frames);
+    expect(full).toEqual(['ICMP echo-request 1']);
+    while (sim.stepBackHop());
+    other.sync(sim);
+    expect(other.frames).toEqual([]);
+    while (sim.stepHop()) other.sync(sim);
+    expect(describeFrames(other.frames)).toEqual(full);
+  });
+
   it('направление и время: интерфейс различает in/out, время — модельное', () => {
     const { b, pc1, pc2 } = lan3();
     const sim = new Simulator(b.project);

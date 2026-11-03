@@ -31,6 +31,7 @@ export const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, 
   const [hover, setHover] = useState(false);
   const [pinned, setPinned] = useState(false);
   const captured = useLinkCaptured(id);
+  const onPath = useCapture((s) => !!s.highlight?.links.has(id));
   if (!data) return null;
   const dx = targetX - sourceX;
   const dy = targetY - sourceY;
@@ -54,6 +55,7 @@ export const LinkEdge = memo(function LinkEdge({ id, sourceX, sourceY, targetX, 
 
   return (
     <>
+      {onPath && <path d={path} className="link-path-glow" fill="none" />}
       <path
         d={path}
         stroke={stroke}

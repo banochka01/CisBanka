@@ -70,7 +70,7 @@ export interface TcpConn {
   jobId?: number;
 }
 
-export type JobKind = 'ping' | 'traceroute' | 'http' | 'nslookup' | 'dhcp';
+export type JobKind = 'ping' | 'traceroute' | 'http' | 'nslookup' | 'dhcp' | 'clear-mac' | 'clear-arp';
 
 /** Задача «Инструментов» ПК: ping, traceroute, открыть сайт… Вывод — строки текста. */
 export interface Job {
@@ -97,7 +97,7 @@ export interface Job {
   cmdId?: number;
 }
 
-export type CommandKind = 'ping' | 'traceroute' | 'http' | 'nslookup' | 'dhcp';
+export type CommandKind = 'ping' | 'traceroute' | 'http' | 'nslookup' | 'dhcp' | 'clear-mac' | 'clear-arp';
 
 /**
  * Внешняя команда пользователя (ping из окна, «Простой пакет», запрос DHCP).

@@ -45,3 +45,6 @@ export function settle() {
   if (mode === 'realtime') getSim().runUntilIdle();
   else getSim().primeHop();
 }
+
+// Только в разработке: доступ к симулятору из консоли браузера (нагрузочные проверки анализатора).
+if (import.meta.env.DEV) (globalThis as Record<string, unknown>).__cisbanka = { getSim, settle };

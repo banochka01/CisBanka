@@ -355,6 +355,7 @@ export class Simulator {
       else if (c.kind === 'traceroute') job = apps.startTraceroute(this, c.deviceId, c.target);
       else if (c.kind === 'http') job = apps.startHttp(this, c.deviceId, c.target);
       else if (c.kind === 'nslookup') job = apps.startNslookup(this, c.deviceId, c.target);
+      else if (c.kind === 'clear-mac' || c.kind === 'clear-arp') job = this.clearTable(c.kind, c.deviceId);
       else job = apps.startDhcp(this, c.deviceId);
       job.cmdId = c.id;
       this.state.cmdJobs[c.id] = job.id;
@@ -574,5 +575,34 @@ export class Simulator {
 
   renewDhcp(deviceId: string): Job {
     return this.command('dhcp', deviceId, 'DHCP');
+  }
+
+  /** Очистить MAC-таблицу свитча (как clear mac address-table dynamic). Пишется в историю команд. */
+  clearMacTable(deviceId: string): Job {
+    return this.command('clear-mac', deviceId, 'MAC');
+  }
+
+  /** Очистить ARP-кэш хоста или роутера (как arp -d * / clear arp-cache). */
+  clearArpCache(deviceId: string): Job {
+    return this.command('clear-arp', deviceId, 'ARP');
+  }
+
+  private clearTable(kind: 'clear-mac' | 'clear-arp', deviceId: string): Job {
+    const d = this.device(deviceId);
+    const rt = this.rt(deviceId);
+    const job = this.newJob(kind, deviceId, kind === 'clear-mac' ? 'MAC' : 'ARP');
+    job.done = true;
+    if (kind === 'clear-mac') {
+      const n = rt.macTable.length;
+      rt.macTable = [];
+      job.lines.push(`MAC-таблица очищена (удалено записей: ${n})`);
+      this.addLog({ kind: 'info', deviceId, reason: `${d.name}: MAC-таблица очищена (удалено записей: ${n}). Пока свитч заново не изучит адреса, кадры на неизвестный MAC рассылаются во все порты (unknown unicast flood).` });
+    } else {
+      const n = Object.keys(rt.arp).length;
+      rt.arp = {};
+      job.lines.push(`ARP-кэш очищен (удалено записей: ${n})`);
+      this.addLog({ kind: 'info', deviceId, reason: `${d.name}: ARP-кэш очищен (удалено записей: ${n}). Перед следующей отправкой устройство снова спросит MAC через ARP.` });
+    }
+    return job;
   }
 }

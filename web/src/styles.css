@@ -439,3 +439,58 @@ table.grid tr.sel td { background: color-mix(in srgb, var(--accent) 10%, transpa
 :root[data-theme='dark'] .pk-arp { background: #463b1f; color: #e4e9ef; }
 :root[data-theme='dark'] .pk-icmp { background: #47294a; color: #e4e9ef; }
 :root[data-theme='dark'] .pk-tcp-ctl { background: #4a4f57; color: #e4e9ef; }
+.ctx-sep { height: 1px; background: var(--border); margin: 4px 0; }
+.node-sniffer {
+  position: absolute; top: -6px; left: -4px; width: 24px; height: 24px; border-radius: 50%; padding: 0; cursor: pointer;
+  border: 1px solid var(--accent); background: var(--panel); font-size: 13px; line-height: 1;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.link-path-glow { stroke: var(--accent); stroke-width: 10; stroke-opacity: 0.45; stroke-linecap: round; }
+.device-node.on-path svg { filter: drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 2px var(--accent)); }
+
+.cap-filter { flex-shrink: 0; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.cap-filter form { display: flex; gap: 6px; }
+.cap-filter-input { flex: 1; min-width: 0; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: 12.5px ui-monospace, Consolas, monospace; }
+.cap-filter-input.valid { background: #d7f7d0; border-color: #39a845; color: #12272e; }
+.cap-filter-input.invalid { background: #ffd8d8; border-color: var(--danger); color: #12272e; }
+:root[data-theme='dark'] .cap-filter-input.valid { background: #1d3b20; color: var(--text); }
+:root[data-theme='dark'] .cap-filter-input.invalid { background: #4a1f1f; color: var(--text); }
+.cap-filter-err { color: var(--danger); font-size: 12.5px; padding-top: 2px; }
+.cap-panes { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.cap-list { display: flex; flex-direction: column; min-height: 60px; border-bottom: 3px solid var(--border); flex-shrink: 0; }
+.cap-detail { flex: 1; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); min-height: 0; }
+.cap-status { flex-shrink: 0; padding: 2px 8px; border-top: 1px solid var(--border); background: var(--panel-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 720px) { .cap-detail { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
+
+.dt { overflow: auto; font: 12.5px/20px ui-monospace, Consolas, monospace; border-right: 1px solid var(--border); outline: none; }
+.dt-row { white-space: pre; cursor: default; padding-right: 8px; }
+.dt-row:hover { background: var(--panel-2); }
+.dt-row.top { font-weight: 600; }
+.dt-row.sel { background: var(--accent); color: var(--accent-text); }
+.dt-twist { display: inline-block; width: 14px; color: var(--muted); cursor: pointer; }
+.dt-row.sel .dt-twist { color: inherit; }
+
+.hx { overflow: auto; font: 12.5px/20px ui-monospace, Consolas, monospace; padding: 0 8px; }
+.hx-line { white-space: pre; display: flex; gap: 14px; }
+.hx-off { color: var(--muted); }
+.hx-hex span.hx-b { padding: 0 3px; cursor: pointer; }
+.hx-gap { display: inline-block; width: 8px; }
+.hx-ascii span { cursor: pointer; }
+.hx-b.on, .hx-a.on { background: var(--accent); color: var(--accent-text); }
+.hx-b:hover, .hx-a:hover { outline: 1px solid var(--accent); }
+
+.modal-backdrop { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, 0.35); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.follow { width: min(900px, 100%); height: min(640px, 100%); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+.follow-head, .follow-foot { display: flex; align-items: center; gap: 10px; padding: 8px 12px; flex-wrap: wrap; }
+.follow-head { border-bottom: 1px solid var(--border); }
+.follow-foot { border-top: 1px solid var(--border); font-size: 12.5px; }
+.follow-body { flex: 1; margin: 0; overflow: auto; padding: 10px 12px; font: 12.5px/1.45 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; background: var(--bg); }
+/* Как в Wireshark: клиент — красным, сервер — синим. */
+.fl-client { color: #b3001b; }
+.fl-server { color: #0b4fb3; }
+.follow-body .fl-client { background: #fbeded; }
+.follow-body .fl-server { background: #edeefb; }
+:root[data-theme='dark'] .fl-client { color: #ff8a8a; }
+:root[data-theme='dark'] .fl-server { color: #8ab4ff; }
+:root[data-theme='dark'] .follow-body .fl-client { background: #3a1d22; }
+:root[data-theme='dark'] .follow-body .fl-server { background: #1d2440; }
