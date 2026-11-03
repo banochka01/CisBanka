@@ -4,3 +4,5 @@ dist
 .env
 data/
 backups/
+.deploy-tag
+.deploy.lock

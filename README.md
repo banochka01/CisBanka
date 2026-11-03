@@ -159,6 +159,58 @@ docker image prune -f            # удалить старые образы
 Схема базы мигрирует автоматически при старте. Откат на прошлую версию: `CISBANKA_TAG=sha-<коммит>` в `.env`,
 затем `docker compose up -d`.
 
+### Автодеплой из GitHub Actions
+
+После зелёных `test`, `docker` и `publish` на `main` джоб `deploy` заходит на сервер по SSH и выкатывает
+ровно опубликованный образ `sha-<коммит>`. Пока секреты не заданы, джоб пропускается (пометка в сводке прогона).
+
+На сервере ключ CI ограничен: в `authorized_keys` для него задан `command="…/scripts/deploy.sh"`, поэтому
+этим ключом нельзя получить shell, пробросить порт или выполнить что-то, кроме скрипта.
+Скрипт принимает только `deploy <sha коммита>` и `status`, остальное отклоняет. Что он делает:
+
+1. Бэкап базы (`scripts/backup.sh`).
+2. `git fetch` и fast-forward репозитория до этого коммита (подтягиваются compose, Caddyfile, скрипты). Если на сервере есть свои коммиты, деплой останавливается.
+3. `docker compose pull/up` образа `sha-<коммит>`.
+4. Ожидание healthcheck и проверка, что `/api/health` отвечает именно этой версией (`{"ok":true,"version":"sha-…"}`).
+5. Если новая версия не поднялась за 2 минуты — откат на прошлую успешную (`.deploy-tag`), джоб красный.
+
+Журнал — `backups/deploy.log`. Вручную на сервере: `./scripts/deploy.sh status`, `./scripts/deploy.sh deploy <sha>`.
+
+**Настройка на сервере** (под тем пользователем, у которого лежит `CisBanka` и который в группе `docker`):
+
+```bash
+cd ~/CisBanka && git pull                    # чтобы появился scripts/deploy.sh
+ssh-keygen -t ed25519 -N "" -C cisbanka-deploy -f ~/cisbanka-deploy   # отдельный ключ только для CI
+KEY="$(cat ~/cisbanka-deploy.pub)"
+echo "command=\"$HOME/CisBanka/scripts/deploy.sh\",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-user-rc $KEY" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+cat ~/cisbanka-deploy                       # приватный ключ → секрет VPS_SSH_KEY (целиком, с BEGIN/END)
+ssh-keyscan -t ed25519 127.0.0.1 2>/dev/null | sed "s/^127.0.0.1/ВАШ_IP/"   # → секрет VPS_KNOWN_HOSTS (ВАШ_IP — как в VPS_HOST)
+rm ~/cisbanka-deploy                        # после того как скопировали в секрет
+```
+
+Если SSH слушает не 22 порт — в `VPS_KNOWN_HOSTS` хост пишется как `[IP]:порт`.
+Проверка с вашего компьютера (ключ должен уметь только `status`/`deploy`):
+
+```bash
+ssh -i cisbanka-deploy user@IP status        # версия и контейнеры
+ssh -i cisbanka-deploy user@IP id            # → «Неизвестная команда», shell не открывается
+```
+
+**Настройка репозитория** (Settings → Secrets and variables → Actions):
+
+| Где | Имя | Значение |
+|---|---|---|
+| Secrets | `VPS_HOST` | IP или домен сервера |
+| Secrets | `VPS_USER` | пользователь, в чей `authorized_keys` добавлен ключ |
+| Secrets | `VPS_SSH_KEY` | приватный ключ `cisbanka-deploy` |
+| Secrets | `VPS_KNOWN_HOSTS` | строка из `ssh-keyscan` — защита от подмены сервера (без неё ключ принимается вслепую, с предупреждением) |
+| Variables | `CISBANKA_URL` | `https://ваш-домен` — внешняя проверка `/api/health` после деплоя (необязательно) |
+| Variables | `VPS_PORT` | порт SSH, если не 22 |
+
+Секреты можно положить и в окружение `production` (Settings → Environments), там же включить ручное подтверждение
+деплоя (Required reviewers). Выключить автодеплой — удалить секрет `VPS_SSH_KEY` и строку ключа из `authorized_keys`.
+
 ### Сборка на самом сервере (без GHCR)
 
 Если сервер мощный или нужен свой форк: без `COMPOSE_FILE` в `.env` используется `docker-compose.yml`,

@@ -113,6 +113,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: short
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@v5
         with:
@@ -129,6 +131,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Версия в /api/health — по ней автодеплой проверяет, что выкатился именно этот образ.
+          build-args: CISBANKA_VERSION=sha-${{ steps.short.outputs.sha }}
       - name: Проверка docker-compose.prod.yml на опубликованном образе (как на VPS)
         run: |
           {
@@ -147,9 +151,80 @@ jobs:
             [ "$s" = healthy ] && break; sleep 3
           done
           sleep 3
-          curl -fsSk https://localhost/api/health
+          curl -fsSk https://localhost/api/health | tee health.json
+          grep -q "\"version\":\"sha-${GITHUB_SHA::7}\"" health.json
           ./scripts/backup.sh
           docker compose images
           # повторно: 80/443 заняты нашим Caddy — это не ошибка
           ./scripts/check-vps.sh
           ./scripts/check-vps.sh --behind-proxy
+      - name: scripts/deploy.sh так, как его вызывает автодеплой по SSH
+        run: |
+          # чужие команды отклоняются, ничего не выполнив
+          for bad in "rm -rf /" "deploy main" "deploy $GITHUB_SHA; id" ""; do
+            if SSH_ORIGINAL_COMMAND="$bad" ./scripts/deploy.sh; then echo "::error::принята команда «$bad»"; exit 1; fi
+          done
+          if SSH_ORIGINAL_COMMAND="deploy 0000000000000000000000000000000000000000" ./scripts/deploy.sh; then exit 1; fi
+          SSH_ORIGINAL_COMMAND="deploy $GITHUB_SHA" ./scripts/deploy.sh
+          SSH_ORIGINAL_COMMAND="status" ./scripts/deploy.sh
+          test "$(cat .deploy-tag)" = "sha-${GITHUB_SHA::7}"
+
+  # Автодеплой на VPS после публикации образа. Пока секреты VPS_* не заданы — пропускается (с пометкой в сводке).
+  # Ключ на сервере ограничен command="…/scripts/deploy.sh" — см. README, раздел «Автодеплой».
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: ${{ vars.CISBANKA_URL }}
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+      VPS_PORT: ${{ vars.VPS_PORT || '22' }}
+      CISBANKA_URL: ${{ vars.CISBANKA_URL }}
+    steps:
+      - id: cfg
+        name: Секреты заданы?
+        run: |
+          if [ -z "$VPS_HOST" ] || [ -z "$VPS_USER" ] || [ -z "$VPS_SSH_KEY" ]; then
+            echo "::notice title=Автодеплой выключен::Задайте секреты VPS_HOST, VPS_USER, VPS_SSH_KEY (README → «Автодеплой»)"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: SSH-ключ и ключ сервера
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          if [ -n "$VPS_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning title=VPS_KNOWN_HOSTS не задан::ключ сервера принят без проверки (ssh-keyscan) — задайте секрет, чтобы исключить подмену сервера"
+            ssh-keyscan -p "$VPS_PORT" "$VPS_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+      - name: Деплой sha-${{ github.sha }}
+        if: steps.cfg.outputs.enabled == 'true'
+        # Команду сервер всё равно заменит на deploy.sh; сюда передаётся только «deploy <sha>», скрипт её проверяет.
+        run: |
+          ssh -i ~/.ssh/deploy -p "$VPS_PORT" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 -o ServerAliveInterval=15 "$VPS_USER@$VPS_HOST" "deploy $GITHUB_SHA"
+      - name: Health-check снаружи (через домен)
+        if: steps.cfg.outputs.enabled == 'true' && vars.CISBANKA_URL != ''
+        run: |
+          want="sha-${GITHUB_SHA::7}"
+          for i in $(seq 1 20); do
+            body=$(curl -fsS --max-time 10 "${CISBANKA_URL%/}/api/health" || true)
+            echo "$body"
+            case "$body" in *"\"version\":\"$want\""*) exit 0 ;; esac
+            sleep 6
+          done
+          echo "::error title=Health-check::${CISBANKA_URL} не отвечает версией $want"
+          exit 1

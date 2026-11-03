@@ -50,7 +50,7 @@ async function studentClient(code: string, login: string, password: string) {
 
 describe('API', () => {
   it('healthcheck', async () => {
-    expect((await client().call('GET', '/api/health')).body).toEqual({ ok: true });
+    expect((await client().call('GET', '/api/health')).body).toEqual({ ok: true, version: 'dev' });
   });
 
   it('регистрация учителя только по коду приглашения; открытой регистрации нет', async () => {

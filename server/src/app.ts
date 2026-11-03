@@ -140,7 +140,7 @@ export async function buildApp(db: DB, cfg: Config) {
 
   app.get('/api/health', async () => {
     db.prepare('SELECT 1').get();
-    return { ok: true };
+    return { ok: true, version: cfg.version };
   });
 
   // ---------- вход ----------

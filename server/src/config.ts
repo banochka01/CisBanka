@@ -11,6 +11,8 @@ export interface Config {
   webDist: string | null;
   /** Сколько попыток входа в минуту с одного IP. */
   loginRateLimit: number;
+  /** Версия сборки (sha-<коммит> из CI) — в /api/health, чтобы автодеплой проверял, что выкатился нужный образ. */
+  version: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -27,5 +29,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     adminInviteCode: adminInviteCode || 'dev-invite',
     webDist: env.WEB_DIST ? resolve(env.WEB_DIST) : null,
     loginRateLimit: Number(env.LOGIN_RATE_LIMIT ?? 10),
+    version: env.CISBANKA_VERSION || 'dev',
   };
 }
