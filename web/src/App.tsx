@@ -14,14 +14,29 @@ import { openPcapFile, PCAP_ACCEPT } from './capture/pcapFile';
 
 // Анализатор (разбор, фильтры, hex) грузится отдельным чанком при первом открытии панели.
 const CaptureDock = lazy(() => import('./capture/CaptureDock'));
-import { startAutosave, useAccount } from './store/account';
-import { AccountBar, AccountDialogs, ReadOnlyBanner } from './account/AccountUI';
+import { restoreDraft, startAutosave } from './store/draft';
 
-/** Открыть новый/пример/импорт: текущий сохраняем, новый ещё не привязан к аккаунту. */
-async function startFresh(p: Project) {
-  await useAccount.getState().saveNow();
-  useAccount.getState().detach();
+function startFresh(p: Project) {
   useStore.getState().loadProject(p);
+}
+
+/** Сохранить проект файлом (.json) — его можно открыть здесь же или передать другому. */
+function exportProject() {
+  const project = useStore.getState().project;
+  const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${(project.name || 'проект').replace(/[\\/:*?"<>|]+/g, '-')}.cisbanka.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 0);
+}
+
+async function importProject(f: File) {
+  try {
+    startFresh(migrateProject(JSON.parse(await f.text())));
+  } catch (err) {
+    alert(`Не удалось открыть «${f.name}»: ${(err as Error).message}`);
+  }
 }
 
 function isTyping(e: KeyboardEvent) {
@@ -43,8 +58,7 @@ function useHotkeys() {
       const k = e.key.toLowerCase();
       if (mod && (k === 's' || e.code === 'KeyS')) {
         e.preventDefault();
-        if (useAccount.getState().user) void useAccount.getState().saveNow();
-        else useAccount.getState().openDialog('auth');
+        exportProject();
         return;
       }
       if (isTyping(e)) return;
@@ -72,23 +86,6 @@ function Toolbar() {
   const fileRef = useRef<HTMLInputElement>(null);
   const pcapRef = useRef<HTMLInputElement>(null);
 
-  const exportJson = () => {
-    const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${project.name || 'проект'}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
-
-  const importJson = async (f: File) => {
-    try {
-      await startFresh(migrateProject(JSON.parse(await f.text())));
-    } catch (err) {
-      alert(`Не удалось открыть файл: ${(err as Error).message}`);
-    }
-  };
-
   return (
     <header className="toolbar">
       <div className="brand">CisBanka</div>
@@ -102,7 +99,7 @@ function Toolbar() {
       <button
         className="btn"
         onClick={() =>
-          (useAccount.getState().user || confirm('Начать новый проект? Несохранённые изменения пропадут.')) && void startFresh(emptyProject())
+          confirm('Начать новый проект? Текущий лучше сначала сохранить в файл.') && startFresh(emptyProject())
         }
       >
         Новый
@@ -112,7 +109,7 @@ function Toolbar() {
         value=""
         onChange={(e) => {
           const ex = EXAMPLES[Number(e.target.value)];
-          if (ex) void startFresh(ex.make());
+          if (ex) startFresh(ex.make());
         }}
       >
         <option value="">Примеры…</option>
@@ -122,9 +119,23 @@ function Toolbar() {
           </option>
         ))}
       </select>
-      <button className="btn" onClick={exportJson}>Экспорт JSON</button>
-      <button className="btn" onClick={() => fileRef.current?.click()}>Импорт JSON</button>
-      <input ref={fileRef} type="file" accept=".json,application/json" hidden onChange={(e) => e.target.files?.[0] && importJson(e.target.files[0])} />
+      <button className="btn" onClick={exportProject} title="Скачать проект файлом (Ctrl+S)">
+        Сохранить проект
+      </button>
+      <button className="btn" onClick={() => fileRef.current?.click()} title="Открыть файл проекта (.json)">
+        Открыть проект
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".json,application/json"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (f) void importProject(f);
+        }}
+      />
       <button className="btn" onClick={() => pcapRef.current?.click()} title="Открыть .pcap/.pcapng в анализаторе трафика">
         Открыть .pcap
       </button>
@@ -140,7 +151,6 @@ function Toolbar() {
         }}
       />
       <div className="spacer" />
-      <AccountBar />
       <button className="btn icon" onClick={undo} disabled={!canUndo} title="Отменить (Ctrl+Z)">↶</button>
       <button className="btn icon" onClick={redo} disabled={!canRedo} title="Повторить (Ctrl+Y)">↷</button>
       <button className="btn icon" onClick={toggleTheme} title="Сменить тему">{theme === 'dark' ? '☀' : '☾'}</button>
@@ -182,14 +192,13 @@ export function App() {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
   useEffect(() => {
-    void useAccount.getState().init();
+    restoreDraft();
     return startAutosave();
   }, []);
   return (
     <ReactFlowProvider>
       <div className="app">
         <Toolbar />
-        <ReadOnlyBanner />
         <div className="main">
           {!readOnly && <Palette />}
           <Canvas />
@@ -204,7 +213,6 @@ export function App() {
       </div>
       <WindowLayer />
       <PortPicker />
-      <AccountDialogs />
     </ReactFlowProvider>
   );
 }
