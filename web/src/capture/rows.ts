@@ -5,12 +5,12 @@ import {
   decodeFrame,
   dissect,
   fieldValues,
-  packetBytes,
+  frameBytes,
+  isImported,
   summarize,
   TcpSeqContext,
   TcpStreamIndex,
-  type Capture,
-  type CapturedFrame,
+  type AnyFrame,
   type Decoded,
   type Dissection,
   type FilterFn,
@@ -24,7 +24,7 @@ export interface Row extends Summary {
   length: number;
   /** Номер TCP-потока, -1 — не TCP. */
   stream: number;
-  frame: CapturedFrame;
+  frame: AnyFrame;
   decoded: Decoded;
 }
 
@@ -35,11 +35,14 @@ interface Cache {
   filter?: { text: string; fn: FilterFn; matched: number[]; scanned: number };
 }
 
-const caches = new WeakMap<Capture, Cache>();
+/** Живой захват или открытый файл — для списка важны только кадры. */
+type Source = { frames: readonly AnyFrame[] };
+
+const caches = new WeakMap<Source, Cache>();
 const dissections = new WeakMap<Row, Dissection>();
 const fieldCache = new WeakMap<Row, ReturnType<typeof fieldValues>>();
 
-function cacheOf(cap: Capture): Cache {
+function cacheOf(cap: Source): Cache {
   let c = caches.get(cap);
   const frames = cap.frames;
   // Кадры «будущего» убрали (шаг назад, очистка) — пересчитываем с нуля.
@@ -52,15 +55,17 @@ function cacheOf(cap: Capture): Cache {
 }
 
 /** Строки 0..upTo-1 (досчитывает недостающие). */
-export function rowsOf(cap: Capture, upTo = cap.frames.length): Row[] {
+export function rowsOf(cap: Source, upTo = cap.frames.length): Row[] {
   const c = cacheOf(cap);
   const frames = cap.frames;
   const t0 = frames[0]?.time ?? 0;
   for (let i = c.rows.length; i < Math.min(upTo, frames.length); i++) {
     const f = frames[i];
-    const bytes = packetBytes(f.packet);
+    const bytes = frameBytes(f);
     const decoded = decodeFrame(bytes);
-    c.rows.push({ ...summarize(decoded, c.ctx), no: f.no, time: (f.time - t0) / 1000, length: bytes.length, stream: c.streams.add(decoded), frame: f, decoded });
+    // Length — длина в проводе (у кадров из файла может быть больше сохранённой).
+    const length = isImported(f) ? f.origLen : bytes.length;
+    c.rows.push({ ...summarize(decoded, c.ctx), no: f.no, time: (f.time - t0) / 1000, length, stream: c.streams.add(decoded), frame: f, decoded });
   }
   return c.rows;
 }
@@ -78,7 +83,7 @@ export function rowDissection(r: Row): Dissection {
  * Индексы строк, прошедших фильтр (null — фильтр пуст, видно всё).
  * Новые кадры досматриваются инкрементально.
  */
-export function filteredOf(cap: Capture, text: string): number[] | null {
+export function filteredOf(cap: Source, text: string): number[] | null {
   const c = cacheOf(cap);
   const rows = rowsOf(cap);
   if (!text.trim()) {

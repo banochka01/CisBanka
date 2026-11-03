@@ -459,6 +459,8 @@ table.grid tr.sel td { background: color-mix(in srgb, var(--accent) 10%, transpa
 .cap-panes { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .cap-list { display: flex; flex-direction: column; min-height: 60px; border-bottom: 3px solid var(--border); flex-shrink: 0; }
 .cap-detail { flex: 1; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); min-height: 0; }
+.cap-notice { flex-shrink: 0; padding: 3px 8px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, #f5a623 18%, var(--panel)); font-size: 12px; }
+.cap-loading { padding: 6px 12px; border-top: 1px solid var(--border); background: var(--panel); font-size: 12px; }
 .cap-status { flex-shrink: 0; padding: 2px 8px; border-top: 1px solid var(--border); background: var(--panel-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 720px) { .cap-detail { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
 

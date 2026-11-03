@@ -1,4 +1,5 @@
 export * from './capture';
+export * from './bytes';
 export * from './summary';
 export * from './dissect';
 export * from './filter';

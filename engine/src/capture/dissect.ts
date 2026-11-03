@@ -221,12 +221,21 @@ export function dissect(bytes: Uint8Array, meta: FrameMeta = {}): Dissection {
         t.f(`Identifier (LE): ${le} (${hex(le, 4)})`, o + 4, 2),
         t.f(`Sequence Number (BE): ${h.seq} (${hex(h.seq, 4)})`, o + 6, 2, 'icmp.seq', h.seq),
         t.f(`Sequence Number (LE): ${sle} (${hex(sle, 4)})`, o + 6, 2, 'icmp.seq_le', sle),
-        t.f(`Data (${h.dataLen} bytes)`, o + 8, h.dataLen, 'data.len', h.dataLen, [t.f(`Data: ${bytesToHex(bytes.subarray(o + 8, end))}`, o + 8, h.dataLen, 'data.data', bytesToHex(bytes.subarray(o + 8, end)))]),
       );
+      if (h.dataLen > 0) {
+        // Как в Wireshark: данные эха — отдельный протокол «data» (eth:ethertype:ip:icmp:data).
+        t.proto('data');
+        protos.push('data');
+        kids.push(t.f(`Data (${h.dataLen} bytes)`, o + 8, h.dataLen, 'data.len', h.dataLen, [t.f(`Data: ${bytesToHex(bytes.subarray(o + 8, end))}`, o + 8, h.dataLen, 'data.data', bytesToHex(bytes.subarray(o + 8, end)))]));
+      }
     } else {
       kids.push(t.f('Unused: 00000000', o + 4, 4));
       const ih = decodeIpv4(bytes, o + 8);
       if (ih) {
+        // Процитированная датаграмма: eth:ethertype:ip:icmp:ip:icmp (или :ip:udp, :ip:tcp).
+        protos.push('ip');
+        const inner = PROTO_NAMES[ih.proto];
+        if (inner && end - (o + 8 + ih.headerLen) >= 8) protos.push(inner.toLowerCase());
         kids.push(t.f(`Internet Protocol Version 4, Src: ${ipToString(ih.src)}, Dst: ${ipToString(ih.dst)}`, o + 8, ih.headerLen, undefined, undefined, ipFields(t, bytes, o + 8, ih, true)));
         const rest = end - (o + 8 + ih.headerLen);
         if (rest > 0) kids.push(t.f(`Original datagram data (${rest} bytes)`, o + 8 + ih.headerLen, rest));

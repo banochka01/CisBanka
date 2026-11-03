@@ -8,7 +8,6 @@
 import type { LogEntry } from '../model/events';
 import type { Packet } from '../model/packet';
 import type { Simulator } from '../sim/Simulator';
-import { encodeFrame } from '../wire/encode';
 
 export type CapturePoint = { kind: 'link'; linkId: string } | { kind: 'port'; portId: string };
 
@@ -114,17 +113,4 @@ export class Capture {
     this.frames = [];
     this.scanned = sim.logCursor;
   }
-}
-
-// Пакеты модели не мутируются, поэтому байты можно кэшировать по объекту.
-const bytesCache = new WeakMap<Packet, Uint8Array>();
-
-/** Байты кадра (кодируются лениво, один раз). */
-export function packetBytes(p: Packet): Uint8Array {
-  let b = bytesCache.get(p);
-  if (!b) {
-    b = encodeFrame(p);
-    bytesCache.set(p, b);
-  }
-  return b;
 }

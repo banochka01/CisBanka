@@ -25,7 +25,8 @@ export class TcpSeqContext {
   base(key: string, seq: number, syn: boolean): number {
     let b = this.isn.get(key);
     if (b === undefined || syn) {
-      b = seq;
+      // Без SYN Wireshark считает первый увиденный сегмент относительным номером 1.
+      b = syn ? seq : (seq - 1) >>> 0;
       this.isn.set(key, b);
     }
     return b;
@@ -68,7 +69,8 @@ export function summarize(d: Decoded, tcp?: TcpSeqContext): Summary {
     let info = ICMP_NAMES[h.type] ?? `Type ${h.type}`;
     if (h.type === 0 || h.type === 8) {
       const swapped = ((h.seq & 0xff) << 8) | (h.seq >> 8);
-      info += `  id=0x${h.id.toString(16).padStart(4, '0')}, seq=${h.seq}/${swapped}, ttl=${ip.ttl}`;
+      // Wireshark выравнивает тип: «Echo (ping) reply    id=…».
+      info = `${info.padEnd(19)}  id=0x${h.id.toString(16).padStart(4, '0')}, seq=${h.seq}/${swapped}, ttl=${ip.ttl}`;
     } else if (h.type === 3) info += ` (${UNREACH[h.code] ?? `code ${h.code}`})`;
     else if (h.type === 11) info += ' (Time to live exceeded in transit)';
     return { ...addr, protocol: 'ICMP', info };
@@ -77,7 +79,7 @@ export function summarize(d: Decoded, tcp?: TcpSeqContext): Summary {
   if (d.dhcp) {
     const h = d.dhcp.h;
     const name = h.msgType !== undefined ? DHCP_MSG_NAMES[h.msgType] ?? `Type ${h.msgType}` : 'BOOTP';
-    return { ...addr, protocol: 'DHCP', info: `DHCP ${name} - Transaction ID 0x${h.xid.toString(16).padStart(8, '0')}` };
+    return { ...addr, protocol: 'DHCP', info: `DHCP ${name.padEnd(8)} - Transaction ID 0x${h.xid.toString(16).padStart(8, '0')}` };
   }
 
   if (d.dns) {

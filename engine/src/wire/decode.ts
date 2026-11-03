@@ -22,7 +22,10 @@ export interface Decoded {
   dns?: { off: number; end: number; h: DnsHeader };
   /** HTTP — только если сегмент начинается со стартовой строки HTTP. */
   http?: { off: number; end: number; h: HttpParsed };
-  /** Данные TCP без распознанного протокола. */
+  /**
+   * Байты без распознанного протокола (как «Data» в Wireshark): полезная нагрузка TCP/UDP,
+   * неизвестный EtherType или протокол IP, заголовок, который не удалось разобрать.
+   */
   data?: { off: number; end: number };
 }
 
@@ -30,6 +33,10 @@ const isPort = (u: { srcPort: number; dstPort: number }, ...ports: number[]) => 
 
 export function decodeFrame(bytes: Uint8Array): Decoded {
   const d: Decoded = { bytes };
+  const rest = (off: number, end = bytes.length) => {
+    if (end > off) d.data = { off, end };
+    return d;
+  };
   const eth = decodeEthernet(bytes);
   if (!eth) return d;
   d.eth = eth;
@@ -37,25 +44,27 @@ export function decodeFrame(bytes: Uint8Array): Decoded {
   if (eth.etherType === ETH_ARP) {
     const h = decodeArp(bytes, o);
     if (h) d.arp = { off: o, h };
+    else rest(o);
     return d;
   }
-  if (eth.etherType !== ETH_IPV4) return d;
+  if (eth.etherType !== ETH_IPV4) return rest(o);
   const ip = decodeIpv4(bytes, o);
-  if (!ip) return d;
+  if (!ip) return rest(o);
   const end = Math.min(bytes.length, o + Math.max(ip.totalLength, ip.headerLen));
   d.ip = { off: o, h: ip, end };
   const l4 = o + ip.headerLen;
-  if (ip.fragOffset !== 0) return d;
+  if (ip.fragOffset !== 0) return rest(l4, end);
 
   if (ip.proto === IP_ICMP) {
     const h = decodeIcmp(bytes, l4, end);
     if (h) d.icmp = { off: l4, h };
+    else rest(l4, end);
   } else if (ip.proto === IP_UDP) {
     const h = decodeUdp(bytes, l4, end, ip.src, ip.dst);
-    if (!h) return d;
+    if (!h) return rest(l4, end);
     d.udp = { off: l4, h };
     const p = l4 + 8;
-    const pend = Math.min(end, l4 + h.length);
+    const pend = Math.max(p, Math.min(end, l4 + h.length));
     if (isPort(h, 67, 68)) {
       const dh = decodeDhcp(bytes, p, pend);
       if (dh) d.dhcp = { off: p, end: pend, h: dh };
@@ -63,9 +72,12 @@ export function decodeFrame(bytes: Uint8Array): Decoded {
       const dn = decodeDns(bytes, p, pend);
       if (dn) d.dns = { off: p, end: pend, h: dn };
     }
-  } else if (ip.proto === IP_TCP) {
+    if (!d.dhcp && !d.dns) rest(p, pend);
+  } else if (ip.proto !== IP_TCP) {
+    rest(l4, end);
+  } else {
     const h = decodeTcp(bytes, l4, end, ip.src, ip.dst);
-    if (!h) return d;
+    if (!h) return rest(l4, end);
     d.tcp = { off: l4, h };
     if (h.payloadLen > 0) {
       const p = h.payloadStart;

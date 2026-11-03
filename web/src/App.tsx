@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { lazy, Suspense, useEffect, useRef } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { emptyProject, migrateProject, type Project } from '@ciscobanka/engine';
 import { useStore } from './store/project';
@@ -9,7 +9,11 @@ import { WindowLayer } from './windows/WindowLayer';
 import { EXAMPLES } from './examples';
 import { useSim } from './store/sim';
 import { SimPanel } from './sim/SimPanel';
-import { CaptureDock } from './capture/CaptureDock';
+import { useCapture } from './store/capture';
+import { openPcapFile, PCAP_ACCEPT } from './capture/pcapFile';
+
+// Анализатор (разбор, фильтры, hex) грузится отдельным чанком при первом открытии панели.
+const CaptureDock = lazy(() => import('./capture/CaptureDock'));
 import { startAutosave, useAccount } from './store/account';
 import { AccountBar, AccountDialogs, ReadOnlyBanner } from './account/AccountUI';
 
@@ -66,6 +70,7 @@ function Toolbar() {
   const readOnly = useStore((s) => s.readOnly);
   const { undo, redo, toggleTheme } = useStore.getState();
   const fileRef = useRef<HTMLInputElement>(null);
+  const pcapRef = useRef<HTMLInputElement>(null);
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
@@ -120,6 +125,20 @@ function Toolbar() {
       <button className="btn" onClick={exportJson}>Экспорт JSON</button>
       <button className="btn" onClick={() => fileRef.current?.click()}>Импорт JSON</button>
       <input ref={fileRef} type="file" accept=".json,application/json" hidden onChange={(e) => e.target.files?.[0] && importJson(e.target.files[0])} />
+      <button className="btn" onClick={() => pcapRef.current?.click()} title="Открыть .pcap/.pcapng в анализаторе трафика">
+        Открыть .pcap
+      </button>
+      <input
+        ref={pcapRef}
+        type="file"
+        accept={PCAP_ACCEPT}
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (f) void openPcapFile(f);
+        }}
+      />
       <div className="spacer" />
       <AccountBar />
       <button className="btn icon" onClick={undo} disabled={!canUndo} title="Отменить (Ctrl+Z)">↶</button>
@@ -156,6 +175,7 @@ function StatusBar() {
 
 export function App() {
   useHotkeys();
+  const analyzer = useCapture((s) => s.tabs.length > 0);
   const theme = useStore((s) => s.theme);
   const readOnly = useStore((s) => s.readOnly);
   useEffect(() => {
@@ -175,7 +195,11 @@ export function App() {
           <Canvas />
           <SimPanel />
         </div>
-        <CaptureDock />
+        {analyzer && (
+          <Suspense fallback={<div className="cap-loading muted">Загрузка анализатора…</div>}>
+            <CaptureDock />
+          </Suspense>
+        )}
         <StatusBar />
       </div>
       <WindowLayer />

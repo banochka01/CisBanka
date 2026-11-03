@@ -13,3 +13,4 @@ export type { RouteRow } from './l3/stack';
 export * from './util/ip';
 export * from './wire';
 export * from './capture';
+export * from './pcap';

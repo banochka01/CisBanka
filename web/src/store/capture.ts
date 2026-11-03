@@ -1,15 +1,18 @@
 // Захваты трафика (снифферы) в UI. Сам захват — engine Capture, читающий журнал симулятора;
 // здесь — список вкладок, активная вкладка и состояние док-панели.
 import { create } from 'zustand';
-import { Capture, type CapturedFrame, type CapturePoint } from '@ciscobanka/engine';
+import { Capture, type AnyFrame, type CapturedFrame, type CapturePoint, type FileCapture } from '@ciscobanka/engine';
 import { getSim } from '../sim/runtime';
 import { useStore } from './project';
 import { useSim } from './sim';
 
+/** Точка захвата или открытый файл (только просмотр, без связи со схемой). */
+export type TabPoint = CapturePoint | { kind: 'file'; name: string };
+
 export interface CaptureTab {
   id: number;
-  point: CapturePoint;
-  cap: Capture;
+  point: TabPoint;
+  cap: Capture | FileCapture;
   /** Меняется при каждом изменении списка кадров — для перерисовки. */
   version: number;
   /** Применённый display-фильтр. */
@@ -38,6 +41,8 @@ interface CaptureUi {
   follow: { tabId: number; stream: number } | null;
 
   start: (point: CapturePoint) => void;
+  /** Вкладка с открытым файлом захвата (разбор файла — capture/openPcap, грузится лениво). */
+  openFile: (cap: FileCapture) => void;
   stop: (id: number) => void;
   resume: (id: number) => void;
   clear: (id: number) => void;
@@ -81,11 +86,12 @@ export function packetPath(f: CapturedFrame): PathHighlight {
 
 let seq = 1;
 
-const samePoint = (a: CapturePoint, b: CapturePoint) =>
-  a.kind === b.kind && (a.kind === 'link' ? a.linkId === (b as typeof a).linkId : a.portId === (b as Extract<CapturePoint, { kind: 'port' }>).portId);
+const samePoint = (a: TabPoint, b: CapturePoint) =>
+  a.kind === b.kind && (a.kind === 'link' ? a.linkId === (b as typeof a).linkId : a.kind === 'port' && a.portId === (b as Extract<CapturePoint, { kind: 'port' }>).portId);
 
 /** Подпись вкладки: «ПК1 Fa0 ↔ Свитч Fa0/1» или «ПК1 Fa0». */
-export function pointTitle(point: CapturePoint): string {
+export function pointTitle(point: TabPoint): string {
+  if (point.kind === 'file') return `📄 ${point.name}`;
   const { project } = useStore.getState();
   const port = (portId: string) => {
     for (const d of project.devices) {
@@ -121,6 +127,11 @@ export const useCapture = create<CaptureUi>((set, get) => ({
     set((s) => ({ tabs: [...s.tabs, t], active: t.id, collapsed: false }));
   },
 
+  openFile(cap) {
+    const t: CaptureTab = { id: seq++, point: { kind: 'file', name: cap.name }, cap, version: 0, filter: '', selected: null, scrollSeq: 0 };
+    set((s) => ({ tabs: [...s.tabs, t], active: t.id, collapsed: false, highlight: null }));
+  },
+
   stop(id) {
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? (t.cap.stop(getSim()), tab(t)) : t)) }));
   },
@@ -153,14 +164,17 @@ export const useCapture = create<CaptureUi>((set, get) => ({
   select(id, no, fromScheme = false) {
     const t = get().tabs.find((x) => x.id === id);
     if (!t) return;
-    const f = no === null ? undefined : t.cap.frames[no - 1];
+    const f: AnyFrame | undefined = no === null ? undefined : t.cap.frames[no - 1];
+    // Кадры из файла не связаны со схемой — подсветки пути нет.
+    // (проверка без isImported: модуль файлов захвата грузится лениво вместе с анализатором)
+    const live = f && !('bytes' in f) ? f : undefined;
     set((s) => ({
       tabs: s.tabs.map((x) => (x.id === id ? { ...x, selected: f ? no : null, scrollSeq: fromScheme ? x.scrollSeq + 1 : x.scrollSeq } : x)),
-      highlight: f ? packetPath(f) : null,
+      highlight: live ? packetPath(live) : null,
     }));
     // В режиме симуляции — открыть разбор этой записи журнала (и выделить конверт).
-    if (f && !fromScheme && useSim.getState().mode === 'simulation' && useSim.getState().selected?.entryId !== f.entry.id) {
-      useSim.getState().select(f.entry.id, 'in');
+    if (live && !fromScheme && useSim.getState().mode === 'simulation' && useSim.getState().selected?.entryId !== live.entry.id) {
+      useSim.getState().select(live.entry.id, 'in');
     }
   },
 
@@ -209,6 +223,7 @@ useSim.subscribe((s, prev) => {
   const order = [...st.tabs].sort((a, b) => (a.id === st.active ? -1 : b.id === st.active ? 1 : 0));
   const entry = getSim().log[id - 1];
   for (const t of order) {
+    if (!(t.cap instanceof Capture)) continue;
     const f = t.cap.frames.find((x) => x.entry.id === id) ?? (entry?.packet && t.cap.frames.find((x) => x.packet.frameId === entry.packet!.frameId));
     if (f) {
       if (t.selected === f.no && st.active === t.id) return;

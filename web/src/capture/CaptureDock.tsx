@@ -1,7 +1,7 @@
 // Анализатор трафика: док-панель снизу с изменяемой высотой (или плавающее окно) с вкладками захватов.
 // Внутри — как в Wireshark: список пакетов, дерево разбора и hex-дамп с взаимной подсветкой.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { fieldAt, type Field } from '@ciscobanka/engine';
+import { FileCapture, fieldAt, framesToPcap, type Field } from '@ciscobanka/engine';
 import { pointTitle, useCapture, type CaptureTab } from '../store/capture';
 import { useSim } from '../store/sim';
 import { useStore } from '../store/project';
@@ -11,24 +11,43 @@ import { HexDump } from './HexDump';
 import { FilterBar } from './FilterBar';
 import { FollowDialog } from './FollowDialog';
 import { filteredOf, rowDissection, rowsOf } from './rows';
+import { downloadBytes, openPcapFile, PCAP_ACCEPT, pcapName } from './pcapFile';
 
-function Toolbar({ tab, shown, stream }: { tab: CaptureTab; shown: number; stream: number | null }) {
+function Toolbar({ tab, shown, indices, stream }: { tab: CaptureTab; shown: number; indices: number[] | null; stream: number | null }) {
   const { stop, resume, clear, setFollow } = useCapture.getState();
   const mode = useSim((s) => s.mode);
   const playing = useSim((s) => s.playing);
   const running = tab.cap.running;
+  const file = tab.cap instanceof FileCapture ? tab.cap : null;
+  const title = pointTitle(tab.point);
+  const save = (only: number[] | null) => {
+    const frames = only ? only.map((i) => tab.cap.frames[i]) : tab.cap.frames;
+    downloadBytes(pcapName(title, only ? '-filtered' : ''), framesToPcap(frames));
+  };
   return (
     <div className="cap-toolbar">
-      <button className="btn small" onClick={() => resume(tab.id)} disabled={running} title="Продолжить захват">
-        ▶ Старт
+      {!file && (
+        <>
+          <button className="btn small" onClick={() => resume(tab.id)} disabled={running} title="Продолжить захват">
+            ▶ Старт
+          </button>
+          <button className="btn small" onClick={() => stop(tab.id)} disabled={!running} title="Остановить захват">
+            ■ Стоп
+          </button>
+          <button className="btn small" onClick={() => clear(tab.id)} title="Очистить список">
+            ⌫ Очистить
+          </button>
+        </>
+      )}
+      <button className="btn small" onClick={() => save(null)} disabled={!tab.cap.frames.length} title="Сохранить все кадры вкладки в .pcap (libpcap, Ethernet) — открывается в Wireshark">
+        💾 Сохранить .pcap
       </button>
-      <button className="btn small" onClick={() => stop(tab.id)} disabled={!running} title="Остановить захват">
-        ■ Стоп
-      </button>
-      <button className="btn small" onClick={() => clear(tab.id)} title="Очистить список">
-        ⌫ Очистить
-      </button>
-      {mode === 'simulation' && (
+      {indices && (
+        <button className="btn small" onClick={() => save(indices)} disabled={!indices.length} title="Сохранить только кадры, прошедшие фильтр">
+          💾 Показанные ({indices.length})
+        </button>
+      )}
+      {!file && mode === 'simulation' && (
         <button className="btn small" onClick={() => useSim.getState().setPlaying(!playing)} title="Пауза/продолжение симуляции">
           {playing ? '⏸ Пауза симуляции' : '⏵ Продолжить симуляцию'}
         </button>
@@ -42,7 +61,7 @@ function Toolbar({ tab, shown, stream }: { tab: CaptureTab; shown: number; strea
         ⇄ Follow TCP stream
       </button>
       <span className="muted cap-count">
-        {running ? <span className="cap-live">● идёт захват</span> : 'остановлен'} · кадров: {tab.cap.frames.length}
+        {file ? `файл ${file.format}` : running ? <span className="cap-live">● идёт захват</span> : 'остановлен'} · кадров: {tab.cap.frames.length}
         {tab.filter ? ` · показано: ${shown}` : ''}
       </span>
     </div>
@@ -87,7 +106,12 @@ function TabBody({ tab, listH }: { tab: CaptureTab; listH: number }) {
 
   return (
     <>
-      <Toolbar tab={tab} shown={shown} stream={row && row.stream >= 0 ? row.stream : null} />
+      <Toolbar tab={tab} shown={shown} indices={indices} stream={row && row.stream >= 0 ? row.stream : null} />
+      {tab.cap instanceof FileCapture && tab.cap.warnings.length > 0 && (
+        <div className="cap-notice" role="status">
+          ⚠ {tab.cap.warnings.join(' ')}
+        </div>
+      )}
       <FilterBar applied={tab.filter} onApply={(t) => setFilter(tab.id, t)} />
       <div className="cap-panes">
         <div className="cap-list" style={{ height: listH }}>
@@ -114,7 +138,7 @@ function TabBody({ tab, listH }: { tab: CaptureTab; listH: number }) {
   );
 }
 
-export function CaptureDock() {
+export default function CaptureDock() {
   const tabs = useCapture((s) => s.tabs);
   const active = useCapture((s) => s.active);
   const detached = useCapture((s) => s.detached);
@@ -125,6 +149,7 @@ export function CaptureDock() {
   const [pos, setPos] = useState({ x: 16, y: 96 });
   const [floatH, setFloatH] = useState(480);
   const floatRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const drag = useRef<{ x: number; y: number; h: number } | null>(null);
   const { setActive, close, setDetached, setHeight, setCollapsed } = useCapture.getState();
 
@@ -182,6 +207,20 @@ export function CaptureDock() {
           </div>
         ))}
         <div className="spacer" />
+        <button className="btn ghost small" onClick={() => fileRef.current?.click()} title="Открыть файл захвата (.pcap, .pcapng) для просмотра">
+          📂 Открыть .pcap
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept={PCAP_ACCEPT}
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (f) void openPcapFile(f);
+          }}
+        />
         {!detached && (
           <button className="btn ghost small" onClick={() => setCollapsed(!collapsed)} title={collapsed ? 'Развернуть' : 'Свернуть'}>
             {collapsed ? '▴' : '▾'}

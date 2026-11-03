@@ -90,8 +90,11 @@ export function fieldValues(d: Decoded, meta: FrameMeta = {}): Map<string, Field
       set('icmp.ident', h.id);
       set('icmp.seq', h.seq);
       set('icmp.seq_le', ((h.seq & 0xff) << 8) | (h.seq >> 8));
-      set('data.len', h.dataLen);
-      set('data.data', bytesToHex(b.subarray(o + 8, d.ip.end)));
+      if (h.dataLen > 0) {
+        set('data', true);
+        set('data.len', h.dataLen);
+        set('data.data', bytesToHex(b.subarray(o + 8, d.ip.end)));
+      }
     }
   }
 
